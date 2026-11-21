@@ -1,0 +1,31 @@
+{
+  "name": "acourd-rpc",
+  "version": "1.0.0",
+  "description": "Zero-Bloat Universal Discord Rich Presence for AI Coding Agents (Antigravity 2.0, Claude Code, OpenCode, Codex)",
+  "type": "module",
+  "main": "./core/daemon.js",
+  "bin": {
+    "acourd": "./bin/acourd.js"
+  },
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "start": "node bin/acourd.js daemon",
+    "status": "node bin/acourd.js status"
+  },
+  "keywords": [
+    "discord-rpc",
+    "rich-presence",
+    "antigravity",
+    "claude-code",
+    "ai-agent",
+    "zero-bloat",
+    "microkernel"
+  ],
+  "author": "Acourd Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
