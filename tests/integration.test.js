@@ -24,6 +24,7 @@ export async function runIntegrationTests() {
     port: testPort,
     customIpcPath: pipePath,
     debounceMs: 50,
+    pidFile: false,
   });
 
   await daemon.start();

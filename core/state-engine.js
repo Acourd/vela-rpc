@@ -12,18 +12,27 @@ import {
 } from './constants.js';
 
 /**
- * Safely truncates a string to at most maxBytes without splitting multi-byte UTF-8 code points.
+ * Safely truncates a string to at most maxBytes without splitting multi-byte UTF-8 code points
+ * or surrogate pairs.
  */
 export function truncateUtf8(str, maxBytes = DISCORD_LIMITS.MAX_FIELD_BYTES) {
-  if (typeof str !== 'string') return '';
+  if (typeof str !== 'string' || maxBytes <= 0) return '';
   const buf = Buffer.from(str, 'utf8');
   if (buf.length <= maxBytes) return str;
 
-  let truncated = buf.subarray(0, maxBytes).toString('utf8');
-  while (Buffer.byteLength(truncated, 'utf8') > maxBytes || truncated.endsWith('\uFFFD')) {
-    truncated = truncated.slice(0, -1);
+  let accumulated = '';
+  let accumulatedBytes = 0;
+
+  for (const char of str) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (accumulatedBytes + charBytes > maxBytes) {
+      break;
+    }
+    accumulated += char;
+    accumulatedBytes += charBytes;
   }
-  return truncated;
+
+  return accumulated;
 }
 
 /**
@@ -33,19 +42,20 @@ export function sanitizePrivacy(text, options = {}) {
   if (typeof text !== 'string') return '';
   let sanitized = text;
 
-  // 1. Obfuscate absolute home paths on Windows/Unix
-  // e.g. C:\Users\<Username>\... or /home/<username>/...
+  // 1. Obfuscate absolute home paths on Windows/Unix (handling single or double backslashes)
+  // e.g. C:\Users\<Username>\..., C:\\Users\\<Username>\\..., or /home/<username>/... or /Users/<username>/...
   sanitized = sanitized.replace(
-    /(?:[a-zA-Z]:[/\\]Users[/\\][^/\\\s]+|[/\\]home[/\\][^/\\\s]+|[/\\]Users[/\\][^/\\\s]+)/gi,
+    /(?:[a-zA-Z]:[/\\]+Users[/\\]+[^/\\\s]+|[/\\]+home[/\\]+[^/\\\s]+|[/\\]+Users[/\\]+[^/\\\s]+)/gi,
     '~'
   );
 
-  // 2. Sensitive files (.env, keys)
+  // 2. Sensitive configuration files (.env, keys)
   sanitized = sanitized.replace(/\.env(?:\.[\w.-]+)?/gi, '[REDACTED_ENV]');
   sanitized = sanitized.replace(/(?:id_rsa|id_ed25519|id_ecdsa|\.pem|\.key)\b/gi, '[REDACTED_KEY]');
 
-  // 3. API keys and Bearer tokens
-  sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|gho_[A-Za-z0-9]{36})/g, '[REDACTED_TOKEN]');
+  // 3. API keys and Bearer tokens (GitHub tokens, OpenAI, Anthropic, generic Bearer)
+  sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,})/g, '[REDACTED_TOKEN]');
 
   // 4. Project stealth mode
   if (options.stealthMode) {
@@ -87,8 +97,8 @@ export class StateEngine extends EventEmitter {
 
     this.currentState = normalizedState;
 
-    if (event.project) this.currentContext.project = event.project;
-    if (event.branch) this.currentContext.branch = event.branch;
+    if (event.project !== undefined) this.currentContext.project = event.project;
+    if (event.branch !== undefined) this.currentContext.branch = event.branch;
     if (event.tool !== undefined) this.currentContext.tool = event.tool;
     if (event.details !== undefined) this.currentContext.details = event.details;
     if (event.agentName) this.agentName = event.agentName;
@@ -115,36 +125,60 @@ export class StateEngine extends EventEmitter {
       detailsText = `${meta.emoji} ${meta.label}`;
     }
 
-    let stateText = event.stateText || `${project}${branch}`;
+    let stateText = event.stateText !== undefined ? event.stateText : `${project}${branch}`;
 
     // Apply privacy sanitization and 128-byte truncation
     detailsText = truncateUtf8(sanitizePrivacy(detailsText, { stealthMode: this.stealthMode }));
     stateText = truncateUtf8(sanitizePrivacy(stateText, { stealthMode: this.stealthMode }));
 
     const largeImageKey = event.largeImage || 'acourd_logo';
-    const largeText = truncateUtf8(event.largeText || `${this.agentName} • ${meta.label}`);
+    const rawLargeText = event.largeText || `${this.agentName} • ${meta.label}`;
+    const largeText = truncateUtf8(rawLargeText);
     const smallImageKey = meta.icon || 'idle';
-    const smallText = truncateUtf8(meta.description || meta.label);
+    const rawSmallText = meta.description || meta.label;
+    const smallText = truncateUtf8(rawSmallText);
 
     const activity = {
-      details: detailsText,
-      state: stateText,
       timestamps: {
         start: this.sessionStartTime,
       },
-      assets: {
-        large_image: largeImageKey,
-        large_text: largeText,
-        small_image: smallImageKey,
-        small_text: smallText,
-      },
+      assets: {},
     };
 
+    // Discord RPC requires string fields to be at least 2 characters if present
+    if (detailsText && detailsText.length >= DISCORD_LIMITS.MIN_FIELD_BYTES) {
+      activity.details = detailsText;
+    }
+    if (stateText && stateText.length >= DISCORD_LIMITS.MIN_FIELD_BYTES) {
+      activity.state = stateText;
+    }
+
+    if (largeImageKey) {
+      activity.assets.large_image = largeImageKey;
+      if (largeText && largeText.length >= DISCORD_LIMITS.MIN_FIELD_BYTES) {
+        activity.assets.large_text = largeText;
+      }
+    }
+
+    if (smallImageKey) {
+      activity.assets.small_image = smallImageKey;
+      if (smallText && smallText.length >= DISCORD_LIMITS.MIN_FIELD_BYTES) {
+        activity.assets.small_text = smallText;
+      }
+    }
+
     if (event.buttons && Array.isArray(event.buttons)) {
-      activity.buttons = event.buttons.slice(0, DISCORD_LIMITS.MAX_BUTTONS).map((btn) => ({
-        label: truncateUtf8(btn.label, DISCORD_LIMITS.MAX_BUTTON_LABEL_BYTES),
-        url: btn.url,
-      }));
+      const validButtons = event.buttons
+        .filter((btn) => btn && typeof btn.url === 'string' && /^https?:\/\//i.test(btn.url))
+        .slice(0, DISCORD_LIMITS.MAX_BUTTONS)
+        .map((btn) => ({
+          label: truncateUtf8(btn.label || 'Link', DISCORD_LIMITS.MAX_BUTTON_LABEL_BYTES),
+          url: btn.url,
+        }));
+
+      if (validButtons.length > 0) {
+        activity.buttons = validButtons;
+      }
     }
 
     return activity;
@@ -191,6 +225,16 @@ export class StateEngine extends EventEmitter {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+  }
+
+  /**
+   * Cancels any pending debounced activity and clears active presence.
+   */
+  clear() {
+    this._cancelTimer();
+    this.pendingActivity = null;
+    this.activeActivity = null;
+    this.currentState = COGNITIVE_STATES.IDLE;
   }
 
   /**

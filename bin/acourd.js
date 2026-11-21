@@ -8,6 +8,50 @@ import { AcourdDaemon } from '../core/daemon.js';
 import { AcourdClient } from '../adapters/generic-client.js';
 import { COGNITIVE_STATES, STATE_METADATA } from '../core/constants.js';
 
+function getCharWidth(codePoint) {
+  if (!codePoint) return 0;
+  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return 0; // variation selectors
+  if (codePoint >= 0x200B && codePoint <= 0x200D) return 0; // zero-width
+  // Wide characters & emojis
+  if (
+    (codePoint >= 0x1F000 && codePoint <= 0x1FAFF) ||
+    (codePoint >= 0x2600 && codePoint <= 0x27BF) ||
+    (codePoint >= 0x2B50 && codePoint <= 0x2B55) ||
+    (codePoint >= 0x231A && codePoint <= 0x231B) ||
+    (codePoint >= 0x23E9 && codePoint <= 0x23F3) ||
+    (codePoint >= 0x25AA && codePoint <= 0x25AB) ||
+    (codePoint >= 0x25FB && codePoint <= 0x25FE) ||
+    (codePoint >= 0x4E00 && codePoint <= 0x9FFF) ||
+    (codePoint >= 0x3000 && codePoint <= 0x303F) ||
+    (codePoint >= 0xFF01 && codePoint <= 0xFF60)
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function fitString(str, targetWidth) {
+  const clean = (str || '').replace(/\x1B\[[0-9;]*m/g, '');
+  let width = 0;
+  let result = '';
+
+  for (const char of clean) {
+    const cp = char.codePointAt(0);
+    const charWidth = getCharWidth(cp);
+    if (width + charWidth > targetWidth - 1 && clean.length > result.length + 1) {
+      return result + '…' + ' '.repeat(Math.max(0, targetWidth - width - 1));
+    }
+    if (width + charWidth > targetWidth) {
+      break;
+    }
+    result += char;
+    width += charWidth;
+  }
+
+  const padding = Math.max(0, targetWidth - width);
+  return result + ' '.repeat(padding);
+}
+
 function printCard(activity = {}) {
   const details = activity.details || 'Standing by';
   const state = activity.state || 'Universal AI RPC';
@@ -15,15 +59,16 @@ function printCard(activity = {}) {
   const largeText = activity.assets?.large_text || 'Acourd RPC';
   const emoji = activity.assets?.small_image ? (STATE_METADATA[activity.assets.small_image]?.emoji || '🤖') : '🤖';
 
+  const w = 52;
   console.log(`
 ┌────────────────────────────────────────────────────────┐
-│  ${emoji}  DISCORD RICH PRESENCE PREVIEW                      │
+│  ${fitString(`${emoji}  DISCORD RICH PRESENCE PREVIEW`, w)} │
 ├────────────────────────────────────────────────────────┤
-│  Application:  ${largeText.padEnd(38)}│
-│  State:        ${details.padEnd(38)}│
-│  Context:      ${state.padEnd(38)}│
-│  Badge:        ${`[ ${smallText} ]`.padEnd(38)}│
-│  Elapsed:      00:14:22 elapsed                        │
+│  ${fitString(`Application:  ${largeText}`, w)} │
+│  ${fitString(`State:        ${details}`, w)} │
+│  ${fitString(`Context:      ${state}`, w)} │
+│  ${fitString(`Badge:        [ ${smallText} ]`, w)} │
+│  ${fitString('Elapsed:      00:14:22 elapsed', w)} │
 └────────────────────────────────────────────────────────┘
 `);
 }
@@ -49,12 +94,28 @@ async function main() {
   const args = process.argv.slice(2);
   const command = args[0] || 'status';
 
-  const client = new AcourdClient();
+  let customPort = null;
+  let customClientId = null;
+
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--port' && args[i + 1]) customPort = parseInt(args[i + 1], 10);
+    if (args[i] === '--client-id' && args[i + 1]) customClientId = args[i + 1];
+  }
+
+  const client = new AcourdClient(customPort ? { port: customPort } : {});
 
   switch (command) {
     case 'daemon': {
       console.log('⚡ Starting Acourd RPC HTTP Daemon...');
-      const daemon = new AcourdDaemon();
+      const daemon = new AcourdDaemon({
+        ...(customPort ? { port: customPort } : {}),
+        ...(customClientId ? { clientId: customClientId } : {}),
+      });
+
+      daemon.on('stop', () => {
+        process.exit(0);
+      });
+
       await daemon.start();
       console.log(`✓ Daemon listening on 127.0.0.1:${daemon.port} (PID: ${process.pid})`);
 
@@ -70,7 +131,7 @@ async function main() {
 
     case 'start': {
       console.log('Spawning Acourd RPC daemon in background...');
-      const result = await AcourdDaemon.ensureRunning();
+      const result = await AcourdDaemon.ensureRunning(customPort ? { port: customPort } : {});
       if (result.spawned) {
         console.log(`✓ Acourd RPC daemon started in background (PID: ${result.pid || 'active'}).`);
       } else {

@@ -33,6 +33,7 @@ export const DAEMON_CONFIG = Object.freeze({
 
 export const DISCORD_LIMITS = Object.freeze({
   RATE_LIMIT_DEBOUNCE_MS: 15000, // Discord 15s rate limit threshold
+  MIN_FIELD_BYTES: 2,            // Minimum required length for string fields in Discord RPC
   MAX_FIELD_BYTES: 128,          // Hard limit for details, state, large_text, small_text
   MAX_BUTTON_LABEL_BYTES: 32,
   MAX_BUTTONS: 2,

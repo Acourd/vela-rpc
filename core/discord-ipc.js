@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
-import { OPCODES, RPC_COMMANDS, RPC_EVENTS, DEFAULT_CLIENT_ID } from './constants.js';
+import { OPCODES, RPC_COMMANDS, RPC_EVENTS, DEFAULT_CLIENT_ID, DAEMON_CONFIG } from './constants.js';
 
 export class DiscordIPC extends EventEmitter {
   constructor(options = {}) {
@@ -42,9 +42,11 @@ export class DiscordIPC extends EventEmitter {
     if (isWindows) {
       for (let i = 0; i < 10; i += 1) {
         paths.push(`\\\\.\\pipe\\discord-ipc-${i}`);
+      }
+      for (let i = 0; i < 10; i += 1) {
         paths.push(`\\\\?\\pipe\\discord-ipc-${i}`);
       }
-      return paths;
+      return Array.from(new Set(paths));
     }
 
     // Unix paths (macOS, Linux, Flatpak, Vesktop, Snap)
@@ -71,7 +73,7 @@ export class DiscordIPC extends EventEmitter {
       }
     }
 
-    return paths;
+    return Array.from(new Set(paths));
   }
 
   /**
@@ -97,22 +99,37 @@ export class DiscordIPC extends EventEmitter {
     }
 
     const failureErr = new Error(`Could not connect to Discord RPC on any pipe: ${lastError?.message || 'No Discord instance found'}`);
-    this.emit('error', failureErr);
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', failureErr);
+    }
     throw failureErr;
   }
 
   /**
-   * Attempts connection to a specific pipe/socket path.
+   * Attempts connection to a specific pipe/socket path with connection timeout.
    */
   _tryConnectPath(targetPath) {
     return new Promise((resolve, reject) => {
       let settled = false;
       const sock = net.createConnection(targetPath);
+      let timeoutTimer = null;
 
       const cleanup = () => {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
         sock.removeAllListeners('connect');
         sock.removeAllListeners('error');
       };
+
+      timeoutTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        sock.destroy();
+        reject(new Error(`Connection to pipe ${targetPath} timed out`));
+      }, DAEMON_CONFIG.SOCKET_CONNECT_TIMEOUT_MS);
 
       sock.once('connect', () => {
         if (settled) return;
@@ -172,6 +189,16 @@ export class DiscordIPC extends EventEmitter {
     while (this.workingBuffer.length >= 8) {
       const opcode = this.workingBuffer.readUInt32LE(0);
       const length = this.workingBuffer.readUInt32LE(4);
+
+      if (length > DAEMON_CONFIG.MAX_PAYLOAD_SIZE_BYTES) {
+        const sizeErr = new Error(`Frame length ${length} exceeds maximum safety limit (${DAEMON_CONFIG.MAX_PAYLOAD_SIZE_BYTES} bytes)`);
+        if (this.listenerCount('error') > 0) {
+          this.emit('error', sizeErr);
+        }
+        this.disconnect();
+        break;
+      }
+
       const totalFrameBytes = 8 + length;
 
       if (this.workingBuffer.length < totalFrameBytes) {
@@ -187,7 +214,10 @@ export class DiscordIPC extends EventEmitter {
         try {
           payload = JSON.parse(payloadSlice.toString('utf8'));
         } catch (parseErr) {
-          this.emit('error', new Error(`Malformed JSON in frame opcode ${opcode}: ${parseErr.message}`));
+          const err = new Error(`Malformed JSON in frame opcode ${opcode}: ${parseErr.message}`);
+          if (this.listenerCount('error') > 0) {
+            this.emit('error', err);
+          }
           continue;
         }
       }
@@ -250,12 +280,12 @@ export class DiscordIPC extends EventEmitter {
   /**
    * Sends SET_ACTIVITY command.
    */
-  setActivity(activity = null) {
+  setActivity(activity = null, pid = null) {
     const nonce = this.nextNonce();
     const packet = {
       cmd: RPC_COMMANDS.SET_ACTIVITY,
       args: {
-        pid: process.pid,
+        pid: pid || activity?.pid || process.pid,
         activity: activity || null,
       },
       nonce,

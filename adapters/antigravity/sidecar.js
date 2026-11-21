@@ -26,9 +26,9 @@ export class AntigravitySidecar {
         encoding: 'utf8',
         timeout: 1000,
       }).trim();
-      return branch || 'main';
+      return (branch && branch !== 'HEAD') ? branch : null;
     } catch (_) {
-      return 'main';
+      return null;
     }
   }
 
@@ -39,7 +39,7 @@ export class AntigravitySidecar {
     await this.client.sendEvent({
       state: COGNITIVE_STATES.IDLE,
       project: projectName,
-      branch,
+      branch: branch || undefined,
       agentName: 'Google Antigravity 2.0',
       details: 'Active in IDE • Ready for missions',
       largeImage: 'antigravity_logo',

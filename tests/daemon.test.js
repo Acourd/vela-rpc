@@ -55,6 +55,7 @@ export async function runDaemonTests() {
   const daemon = new AcourdDaemon({
     port: testPort,
     debounceMs: 50,
+    pidFile: false,
   });
 
   await daemon.start();
@@ -94,11 +95,31 @@ export async function runDaemonTests() {
   assert.ok(statusAfter.body.activity.details.includes('Microkernel stress testing'));
   console.log('✓ State persistence inside daemon verified');
 
-  // Test 3: POST /clear
+  // Test 3: POST /clear cancels pending activity and prevents resurrection
+  // Queue a debounced event that would fire after 50ms
+  await requestHttp(
+    'POST',
+    '/event',
+    {
+      state: COGNITIVE_STATES.TOOL_CALL,
+      project: 'AcourdDaemonTest',
+      details: 'Pending debounced event to clear',
+      forceImmediate: false,
+    },
+    testPort
+  );
+  assert.ok(daemon.stateEngine.pendingActivity !== null, 'Event should be pending');
+
   const clearRes = await requestHttp('POST', '/clear', {}, testPort);
   assert.strictEqual(clearRes.statusCode, 200);
   assert.strictEqual(clearRes.body.cleared, true);
-  console.log('✓ POST /clear verified');
+  assert.strictEqual(daemon.stateEngine.pendingActivity, null, 'Pending activity must be cancelled on /clear');
+  assert.strictEqual(daemon.stateEngine.activeActivity, null, 'Active activity must be null on /clear');
+
+  // Wait 70ms to ensure the timer did not fire and resurrect presence
+  await new Promise((r) => setTimeout(r, 70));
+  assert.strictEqual(daemon.stateEngine.activeActivity, null, 'Debounce timer must not resurrect cleared activity');
+  console.log('✓ POST /clear and anti-resurrection verified');
 
   // Test 4: POST /stop
   const stopRes = await requestHttp('POST', '/stop', {}, testPort);

@@ -42,17 +42,42 @@ export async function runStateEngineTests() {
   assert.ok(!sanitizedEnv.includes('.env'), 'Must redact .env mentions');
   assert.ok(sanitizedEnv.includes('[REDACTED_ENV]'), 'Must replace with [REDACTED_ENV]');
 
-  const rawSecret = 'Bearer sk-1234567890abcdef1234567890abcdef and ghp_123456789012345678901234567890123456';
+  const rawSecret = 'Bearer sk-1234567890abcdef1234567890abcdef and ghp_123456789012345678901234567890123456 and sk-ant-api03-abcdef1234567890abcdef123456';
   const sanitizedSecret = sanitizePrivacy(rawSecret);
-  assert.ok(!sanitizedSecret.includes('sk-12345'), 'Must redact API keys');
+  assert.ok(!sanitizedSecret.includes('sk-12345'), 'Must redact OpenAI API keys');
   assert.ok(!sanitizedSecret.includes('ghp_12345'), 'Must redact GitHub tokens');
+  assert.ok(!sanitizedSecret.includes('sk-ant-'), 'Must redact Anthropic API keys');
   assert.ok(sanitizedSecret.includes('[REDACTED_TOKEN]'));
+
+  // Double-backslash Windows path
+  const doubleSlashPath = 'Processing C:\\\\Users\\\\Ayzok\\\\Projects\\\\app\\\\file.js';
+  const sanitizedDoubleSlash = sanitizePrivacy(doubleSlashPath);
+  assert.ok(!sanitizedDoubleSlash.includes('Ayzok'), 'Must redact double-escaped Windows paths');
+  assert.ok(sanitizedDoubleSlash.includes('~'), 'Must replace with tilde');
 
   const stealthTest = sanitizePrivacy('Workspace: super-secret-corp', { stealthMode: true });
   assert.ok(stealthTest.includes('Workspace: [Private]'), 'Stealth mode must mask workspace name');
   console.log('✓ Privacy & secret sanitization verified');
 
-  // Test 3: Rate-limit debounce (15s cooldown)
+  // Test 3: Discord schema constraints: min 2 chars, button URL validation
+  const testEngine = new StateEngine();
+  const schemaPayload = testEngine.buildActivityPayload({
+    details: 'a', // 1 char: should be omitted or padded
+    stateText: '', // empty: should be omitted
+    buttons: [
+      { label: 'GitHub', url: 'https://github.com/project' },
+      { label: 'Bad Link', url: 'javascript:alert(1)' },
+      { label: 'Empty Link', url: '' },
+    ],
+  });
+  // State is empty string, so it should not be present
+  assert.strictEqual(schemaPayload.state, undefined, 'Empty state field must be omitted');
+  // Buttons should only retain valid https:// URL
+  assert.strictEqual(schemaPayload.buttons?.length, 1, 'Invalid non-HTTP buttons must be filtered out');
+  assert.strictEqual(schemaPayload.buttons[0].url, 'https://github.com/project');
+  console.log('✓ Discord schema constraints & button URL validation verified');
+
+  // Test 4: Rate-limit debounce (15s cooldown)
   const engine = new StateEngine({ debounceMs: 100 }); // Fast 100ms debounce for tests
 
   let dispatchedActivities = [];
@@ -103,6 +128,27 @@ export async function runStateEngineTests() {
   assert.strictEqual(engine.currentState, COGNITIVE_STATES.IDLE, 'Unknown state must fall back to IDLE');
   console.log('✓ Cognitive state normalization verified');
 
+  // Test 6: Extreme event flood (50 parallel events) & memory bounds
+  const floodEngine = new StateEngine({ debounceMs: 1000 });
+  for (let i = 0; i < 50; i += 1) {
+    floodEngine.processEvent({
+      state: COGNITIVE_STATES.TOOL_CALL,
+      details: `Tool batch operation #${i}`,
+      project: 'Acourd',
+    });
+  }
+  // Exactly 1 dispatched immediately, 1 queued as pendingActivity (no array bloat)
+  assert.ok(floodEngine.pendingActivity !== null, 'Last event must be queued');
+  assert.ok(floodEngine.pendingActivity.details.includes('#49'), 'Pending activity must be latest event (#49)');
+
+  // Test 7: engine.clear() cancels debounce timer and empties pendingActivity
+  floodEngine.clear();
+  assert.strictEqual(floodEngine.pendingActivity, null, 'clear() must null out pendingActivity');
+  assert.strictEqual(floodEngine.activeActivity, null, 'clear() must null out activeActivity');
+  assert.strictEqual(floodEngine.debounceTimer, null, 'clear() must cancel timer');
+  console.log('✓ 50-event flood queue bounds & clear() cancellation verified');
+
+  floodEngine.destroy();
   engine.destroy();
 }
 

@@ -128,9 +128,9 @@ export function translateClaudeEvent(hookName, payload = {}, cwd = process.cwd()
  */
 async function main() {
   const args = process.argv.slice(2);
-  const hookName = args[0] || process.env.CLAUDE_HOOK_NAME || 'SessionStart';
+  let hookName = args[0] || process.env.CLAUDE_HOOK_NAME || null;
 
-  // Read stdin if piped, with 200ms timeout
+  // Read stdin if piped, with 250ms timeout
   let payload = {};
   if (!process.stdin.isTTY) {
     try {
@@ -138,6 +138,7 @@ async function main() {
       const readPromise = new Promise((resolve) => {
         process.stdin.on('data', (d) => chunks.push(d));
         process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        process.stdin.on('error', () => resolve(''));
       });
       const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(''), 250));
       const raw = await Promise.race([readPromise, timeoutPromise]);
@@ -147,14 +148,16 @@ async function main() {
     } catch (_) {}
   }
 
+  hookName = hookName || payload.hook_event_name || 'SessionStart';
+
   const client = new AcourdClient();
   const event = translateClaudeEvent(hookName, payload, process.cwd());
-  const result = await client.sendEvent(event, true);
+  await client.sendEvent(event, true);
 
   // Silent exit code 0 so Claude Code hook runner is never blocked
   process.exit(0);
 }
 
-if (process.argv[1] && process.argv[1].endsWith('hook.js')) {
+if (process.argv[1] && (process.argv[1].endsWith('claude-code/hook.js') || process.argv[1].endsWith('claude-code\\hook.js'))) {
   main().catch(() => process.exit(0));
 }

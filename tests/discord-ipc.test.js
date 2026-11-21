@@ -95,6 +95,23 @@ export async function runDiscordIpcTests() {
   client.disconnect();
   await mockServer.close();
   console.log('✓ Clean disconnection verified');
+
+  // Test 5: Connection failure rejection without unhandled EventEmitter crash
+  const failingClient = new DiscordIPC({
+    clientId: '123456789012345678',
+    customPath: process.platform === 'win32' ? '\\\\.\\pipe\\non-existent-pipe-test-xyz' : '/tmp/non-existent-socket-test-xyz.sock',
+  });
+
+  let caughtError = null;
+  try {
+    // Calling connect without registering an 'error' event listener
+    // Should reject the promise and NOT crash with unhandled EventEmitter error
+    await failingClient.connect();
+  } catch (err) {
+    caughtError = err;
+  }
+  assert.ok(caughtError !== null, 'Connection to non-existent pipe must reject');
+  console.log('✓ Graceful connection failure without unhandled error verified');
 }
 
 if (process.argv[1] && process.argv[1].endsWith('discord-ipc.test.js')) {

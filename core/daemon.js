@@ -8,6 +8,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DAEMON_CONFIG, DEFAULT_CLIENT_ID } from './constants.js';
@@ -17,14 +18,16 @@ import { StateEngine } from './state-engine.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export class AcourdDaemon {
+export class AcourdDaemon extends EventEmitter {
   constructor(options = {}) {
+    super();
     this.port = options.port || DAEMON_CONFIG.DEFAULT_PORT;
     this.host = options.host || DAEMON_CONFIG.DEFAULT_HOST;
     this.clientId = options.clientId || DEFAULT_CLIENT_ID;
     this.customIpcPath = options.customIpcPath || null;
     this.debounceMs = options.debounceMs;
     this.stealthMode = options.stealthMode || false;
+    this.pidFile = options.pidFile !== undefined ? options.pidFile : null;
 
     this.server = null;
     this.ipc = null;
@@ -48,9 +51,9 @@ export class AcourdDaemon {
       customPath: this.customIpcPath,
     });
 
-    // Pipe state engine emissions into Discord IPC
+    // Pipe state engine emissions into Discord IPC (only if ready)
     this.stateEngine.on('activity', (activity) => {
-      if (this.ipc && this.ipc.connected) {
+      if (this.ipc && this.ipc.ready) {
         try {
           this.ipc.setActivity(activity);
         } catch (err) {
@@ -151,7 +154,15 @@ export class AcourdDaemon {
       return;
     }
 
-    const { pathname } = new URL(req.url, `http://${this.host}:${this.port}`);
+    let pathname;
+    try {
+      const parsedUrl = new URL(req.url, `http://${this.host}:${this.port}`);
+      pathname = parsedUrl.pathname;
+    } catch (_) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Malformed request URL' }));
+      return;
+    }
 
     if (req.method === 'GET' && (pathname === '/status' || pathname === '/health')) {
       const status = {
@@ -182,11 +193,13 @@ export class AcourdDaemon {
     }
 
     if (req.method === 'POST' && pathname === '/clear') {
-      if (this.ipc && this.ipc.connected) {
-        this.ipc.clearActivity();
+      if (this.ipc && this.ipc.ready) {
+        try {
+          this.ipc.clearActivity();
+        } catch (_) {}
       }
       if (this.stateEngine) {
-        this.stateEngine.activeActivity = null;
+        this.stateEngine.clear();
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, cleared: true }));
@@ -206,14 +219,23 @@ export class AcourdDaemon {
 
   _parseJsonBody(req, res, callback) {
     let raw = '';
+    let exceeded = false;
+
     req.on('data', (chunk) => {
+      if (exceeded) return;
       raw += chunk;
       if (raw.length > DAEMON_CONFIG.MAX_PAYLOAD_SIZE_BYTES) {
+        exceeded = true;
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload too large' }));
         req.destroy();
       }
     });
 
+    req.on('error', () => {});
+
     req.on('end', () => {
+      if (exceeded) return;
       try {
         const data = raw.trim() ? JSON.parse(raw) : {};
         callback(data);
@@ -235,15 +257,17 @@ export class AcourdDaemon {
   }
 
   _writePidFile() {
+    if (this.pidFile === false) return;
     try {
-      const pidPath = AcourdDaemon.getPidFilePath();
+      const pidPath = typeof this.pidFile === 'string' ? this.pidFile : AcourdDaemon.getPidFilePath();
       fs.writeFileSync(pidPath, JSON.stringify({ pid: process.pid, port: this.port, time: Date.now() }));
     } catch (_) {}
   }
 
   _removePidFile() {
+    if (this.pidFile === false) return;
     try {
-      const pidPath = AcourdDaemon.getPidFilePath();
+      const pidPath = typeof this.pidFile === 'string' ? this.pidFile : AcourdDaemon.getPidFilePath();
       if (fs.existsSync(pidPath)) {
         fs.unlinkSync(pidPath);
       }
@@ -262,7 +286,7 @@ export class AcourdDaemon {
     }
 
     if (this.ipc) {
-      if (this.ipc.connected) {
+      if (this.ipc.ready) {
         try {
           this.ipc.clearActivity();
         } catch (_) {}
@@ -271,11 +295,13 @@ export class AcourdDaemon {
     }
 
     if (this.server) {
+      this.server.closeAllConnections?.();
       await new Promise((resolve) => this.server.close(resolve));
       this.server = null;
     }
 
     this._removePidFile();
+    this.emit('stop');
     return { ok: true };
   }
 

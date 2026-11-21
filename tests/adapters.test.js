@@ -68,15 +68,20 @@ export async function runAdaptersTests() {
   assert.strictEqual(sessionEnd.forceImmediate, true);
   console.log('✓ Claude Code event translation verified');
 
-  // Test 3: Claude Code Hook Configuration Generator
+  // Test 3: Claude Code Hook Configuration Generator (Schema Compliance)
   const hookConfig = generateClaudeHookConfig();
   assert.ok(hookConfig.hooks.SessionStart);
+  assert.strictEqual(Array.isArray(hookConfig.hooks.SessionStart), true);
+  assert.strictEqual(Array.isArray(hookConfig.hooks.SessionStart[0].hooks), true);
+  assert.strictEqual(hookConfig.hooks.SessionStart[0].hooks[0].type, 'command');
+  assert.strictEqual(hookConfig.hooks.SessionStart[0].hooks[0].timeout, 2);
+  assert.ok(hookConfig.hooks.SessionStart[0].hooks[0].command.includes('hook.js'));
   assert.ok(hookConfig.hooks.UserPromptSubmit);
   assert.ok(hookConfig.hooks.PreToolUse);
   assert.ok(hookConfig.hooks.PostToolUse);
   assert.ok(hookConfig.hooks.Stop);
   assert.ok(hookConfig.hooks.SessionEnd);
-  console.log('✓ Claude Code hook configuration generator verified');
+  console.log('✓ Claude Code hook configuration generator (schema compliant) verified');
 
   // Test 4: translateAntigravityEvent
   const agIntent = translateAntigravityEvent('intent', {
