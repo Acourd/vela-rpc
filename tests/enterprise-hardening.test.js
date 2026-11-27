@@ -134,6 +134,13 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!JSON.stringify(templateBypassCheck).includes('CLOUD_DEFAULT_SECRET'), 'Template whitespace normalization must never leak URL credentials');
   assert.ok(!JSON.stringify(templateBypassCheck).includes('eyJhbGci'), 'alg=none empty-payload+empty-sig JWT must be redacted');
 
+  const userOnlyLeadingSpace = engine.buildActivityPayload({
+    state: 'thinking',
+    chatTitle: 'https:// USER_ONLY_CANARY@my_host.test/x postgres://admin:DB_PASS_CANARY@db.internal:5432/app',
+  });
+  assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('USER_ONLY_CANARY'), 'User-only URL credential with leading space must be redacted');
+  assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('DB_PASS_CANARY'), 'Non-HTTP URI credentials must be redacted');
+
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
   assert.ok(!serialized.includes('SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'), 'JWT must never reach Discord');
@@ -216,13 +223,15 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), null);
-    // TOML line-ending backslash with horizontal whitespace + quoted spaces in profile name + [[profiles.work]] array-of-tables rejected
+    // TOML line-ending backslash with horizontal whitespace + quoted spaces in profile name (both config and explicit profile) + [[profiles.work]] array-of-tables rejected
     fs.writeFileSync(
       path.join(tmpHome, '.codex', 'config.toml'),
-      'profile = " work with space "\n[profiles." work with space "]\nmodel = """\\ \t \n  gpt-5"""\n',
+      'profile = " work with space "\n[profiles."work with space"]\nmodel = "gpt-4.1"\n[profiles." work with space "]\nmodel = """\\ \t \n  gpt-5"""\n',
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5');
+    assert.strictEqual(detectDynamicModel('codex', { profile: ' work with space ' }, { homeDir: tmpHome, env: {} }), 'GPT 5');
+    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: { CODEX_PROFILE: ' work with space ' } }), 'GPT 5');
 
     fs.writeFileSync(
       path.join(tmpHome, '.codex', 'config.toml'),

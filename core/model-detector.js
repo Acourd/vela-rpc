@@ -446,10 +446,8 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   };
 
   const rawProfile = explicitProfile ?? sections[ROOT_KEY].profile ?? sections[ROOT_KEY].active_profile ?? null;
-  if (rawProfile !== null && rawProfile !== undefined && String(rawProfile).trim() !== '') {
-    const normProfile = explicitProfile
-      ? String(explicitProfile).trim().replace(/^["'](.*)["']$/, '$1')
-      : String(rawProfile);
+  if (rawProfile !== null && rawProfile !== undefined && String(rawProfile).length > 0) {
+    const normProfile = String(rawProfile);
     const profModel =
       pickModel(sections[JSON.stringify(['profiles', normProfile])]) ||
       pickModel(sections[JSON.stringify(['profile', normProfile])]) ||
