@@ -136,11 +136,12 @@ export async function runEnterpriseHardeningTests() {
 
   const userOnlyLeadingSpace = engine.buildActivityPayload({
     state: 'thinking',
-    chatTitle: 'https:// USER_ONLY_CANARY@my_host.test/x postgres://admin:DB_PASS_CANARY@db.internal:5432/app x://alice:SINGLE_SCHEME_CANARY@my_host.test/x',
+    chatTitle: `https:// USER_ONLY_CANARY@my_host.test/x postgres://admin:DB_PASS_CANARY@db.internal:5432/app x://alice:SINGLE_SCHEME_CANARY@my_host.test/x ${'a'.repeat(33)}://alice:LONG_SCHEME_CANARY@my_host.test/x`,
   });
   assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('USER_ONLY_CANARY'), 'User-only URL credential with leading space must be redacted');
   assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('DB_PASS_CANARY'), 'Non-HTTP URI credentials must be redacted');
   assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('SINGLE_SCHEME_CANARY'), 'Single-letter RFC 3986 URI scheme credentials must be redacted');
+  assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('LONG_SCHEME_CANARY'), '33+ char RFC 3986 URI scheme credentials must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -249,6 +250,12 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
+    fs.writeFileSync(
+      path.join(tmpHome, '.hermes', 'config.yaml'),
+      'profile: work\nnotes: |\n  [profiles.work]\n  model: YAML_SCALAR_CANARY\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
     fs.writeFileSync(
       path.join(tmpHome, '.hermes', 'config.yaml'),
       'inactive:\n  model: wrong-nested-only\n',

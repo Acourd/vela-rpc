@@ -408,43 +408,48 @@ function stripTomlMultilineAndComments(raw) {
  * strips all multiline strings / nested arrays / inline tables / comments before parsing,
  * honors active `profile`, and NEVER reads inactive profiles.
  */
-export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
+export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format = 'auto') {
   if (!raw || typeof raw !== 'string') return null;
 
   const ROOT_KEY = '[]';
   const sections = { [ROOT_KEY]: {} };
   let currentSection = ROOT_KEY;
-  let isTomlSection = false;
+  let isTomlSection = format === 'toml';
   const yamlStack = [];
 
-  const cleaned = stripTomlMultilineAndComments(raw);
+  const cleaned = format === 'yaml' ? raw : stripTomlMultilineAndComments(raw);
   const lines = cleaned.split(/\r?\n/);
   for (const rawLine of lines) {
     const indent = rawLine.match(/^[ \t]*/)[0].replace(/\t/g, '  ').length;
     const line = rawLine.trim();
-    if (!line) continue;
+    if (!line || line.startsWith('#')) continue;
 
-    const parsedHeader = parseTomlSectionHeader(line);
-    if (parsedHeader !== null) {
-      yamlStack.length = 0;
-      isTomlSection = true;
-      currentSection = parsedHeader;
-      if (!sections[currentSection]) sections[currentSection] = {};
-      continue;
-    }
-
-    if (!isTomlSection) {
+    if (!isTomlSection && yamlStack.length > 0) {
       while (yamlStack.length > 0 && indent <= yamlStack[yamlStack.length - 1].indent) {
         yamlStack.pop();
       }
       if (yamlStack.length > 0 && yamlStack[yamlStack.length - 1].blockScalar) {
         continue;
       }
+    }
+
+    if (format !== 'yaml') {
+      const parsedHeader = parseTomlSectionHeader(line);
+      if (parsedHeader !== null) {
+        yamlStack.length = 0;
+        isTomlSection = true;
+        currentSection = parsedHeader;
+        if (!sections[currentSection]) sections[currentSection] = {};
+        continue;
+      }
+    }
+
+    if (!isTomlSection) {
       if (/^-(?:\s|$)/.test(line)) {
         yamlStack.push({ indent, key: '__seq__', blockScalar: false });
         continue;
       }
-      const yamlHeaderMatch = line.match(/^("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_.-]+)\s*:\s*([|>][+-]?\d*)?\s*$/);
+      const yamlHeaderMatch = line.match(/^("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_.-]+)\s*:\s*([|>](?:[+-]?\d*|\d+[+-]?))?\s*(?:#.*)?$/);
       if (yamlHeaderMatch) {
         const hdrKey = decodeTomlValueString(yamlHeaderMatch[1]);
         yamlStack.push({ indent, key: hdrKey, blockScalar: Boolean(yamlHeaderMatch[2]) });
@@ -452,7 +457,7 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
       }
     }
 
-    const kvMatch = line.match(/^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*([:=])\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*$/);
+    const kvMatch = line.match(/^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*([:=])\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*(?:#.*)?$/);
     if (kvMatch) {
       const key = kvMatch[1].trim();
       const sep = kvMatch[2];
@@ -628,7 +633,7 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
       null;
   } else if (id === 'hermes') {
     rawModel =
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.hermes', 'config.yaml')), safePayload.profile || options.profile || env.HERMES_PROFILE || null) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.hermes', 'config.yaml')), safePayload.profile || options.profile || env.HERMES_PROFILE || null, 'yaml') ||
       env.HERMES_MODEL ||
       null;
   } else if (id === 'kimi-code' || id === 'kimi') {

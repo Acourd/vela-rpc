@@ -75,7 +75,7 @@ function redactTextPrimitives(input) {
     }
   );
   sanitized = sanitized.replace(
-    /((?:h\s*t\s*t\s*p(?:\s*s)?|w\s*s(?:\s*s)?|\b[a-z](?:[\t\r\n]*[a-z0-9+.-]){0,31})\s*:\s*\/\s*\/)[^/?#]+@(?=\s*(?:[^/?#\s@]|[\t\r\n])+)/gi,
+    /((?:h\s*t\s*t\s*p(?:\s*s)?|w\s*s(?:\s*s)?|\b[a-z](?:[\t\r\n]*[a-z0-9+.-])*)\s*:\s*\/\s*\/)[^/?#]+@(?=\s*(?:[^/?#\s@]|[\t\r\n])+)/gi,
     '$1[REDACTED]@'
   );
   return sanitized;
