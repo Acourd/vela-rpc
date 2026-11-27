@@ -1,187 +1,119 @@
-# Acourd RPC (Aura AI RPC)
-> **Zero-Bloat Universal Discord Rich Presence Microkernel for AI Coding Environments**  
-> Native Node.js (ESM) • Zero Dependencies (`dependencies: {}`) • Sub-15ms Hook Latency • 15s Rate-Limit Debounce
+# Vela RPC
 
----
+**English** · [Español](README.es.md)
 
-## 🎨 Visual Presence Showcase (Discord Preview)
+Minimalist Discord Rich Presence for AI coding harnesses. One local Node.js daemon with zero npm dependencies handles 14 tools, reads the active model and session title directly, and never sends prompt text or secrets to Discord.
 
-Acourd RPC renders high-fidelity Rich Presence cards dynamically reflecting your AI agent's cognitive state:
+## Discord preview
 
-### 1. 🧠 Reasoning & Planning (`thinking`)
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│  [  ANTIGRAVITY 2.0  ]                                                 │
-│                                                                        │
-│  (●) Google Antigravity 2.0                                            │
-│      🧠 Reasoning & Planning                                           │
-│      AcourdCore • feat/microkernel                                     │
-│      [ Deep cognitive synthesis ]                                      │
-│      00:04:12 elapsed                                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
+The preview below switches automatically with your GitHub theme (dark mode shows Official Dark; light mode shows Porcelain Light).
 
-### 2. 🛠️ Tool Execution (`tool_call`)
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│  [  CLAUDE CODE  ]                                                     │
-│                                                                        │
-│  (●) Claude Code                                                       │
-│      🛠️ Editing discord-ipc.js                                         │
-│      universal-rpc • main                                              │
-│      [ Modifying files & running commands ]                            │
-│      00:12:45 elapsed                                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/previews/discord_all14_classic_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/previews/discord_all14_porcelain_light.png">
+  <img alt="Vela RPC Discord preview across 14 AI harnesses" src="assets/previews/discord_all14_classic_dark.png" width="100%">
+</picture>
 
-### 3. 🛡️ Deterministic Verification (`verifying`)
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│  [  PHYSICAL ORACLE  ]                                                 │
-│                                                                        │
-│  (●) Google Antigravity 2.0                                            │
-│      🛡️ Deterministic Verification (5/5 PASS)                          │
-│      acourd-rpc • release/v1.0                                         │
-│      [ Running test suites (Exit Code 0) ]                             │
-│      00:18:03 elapsed                                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
+<details>
+<summary>View Titanium OLED icon pack</summary>
 
-### 4. ⚡ Agent Swarm Coordination (`swarm`)
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│  [  SWARM ORCHESTRATOR  ]                                              │
-│                                                                        │
-│  (●) Google Antigravity 2.0                                            │
-│      ⚡ Directing Swarm: [SecurityAuditor]                             │
-│      distributed-kernel • swarm-topology                               │
-│      [ Orchestrating multi-agent topology ]                            │
-│      00:25:30 elapsed                                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
+![Vela RPC Titanium OLED preview](assets/previews/discord_all14_titanium_oled.png)
 
-### 5. ☕ Standing By / Idle (`idle`)
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│  [  IDLE / STANDBY  ]                                                  │
-│                                                                        │
-│  (●) Google Antigravity 2.0                                            │
-│      ☕ Mission accomplished • Standing by                             │
-│      acourd-rpc • main                                                 │
-│      [ Awaiting instruction ]                                          │
-│      00:32:10 elapsed                                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
+</details>
 
----
+## Installation
 
-## 🏛️ Architecture & System Topology
+Requires Node.js 18+ and a local Discord desktop client. No `npm install` needed.
 
-```
-   ┌─────────────────────────────────────────────────────────────────┐
-   │ AI Agents & Environments (Antigravity 2.0, Claude Code, etc.)  │
-   └───────────────────────────────┬─────────────────────────────────┘
-                                   │ Ephemeral POST (< 15ms)
-                                   ▼
-   ┌─────────────────────────────────────────────────────────────────┐
-   │ Acourd Micro-Daemon (HTTP Loopback: 127.0.0.1:19452)             │
-   │ ├─ Autospawn & Single Instance Mutex                            │
-   │ ├─ State Engine (Cognitive States: idle, thinking, tool, swarm) │
-   │ ├─ 15s Cooldown Rate-Limiter (Discord anti-flood protection)    │
-   │ ├─ Privacy Sanitizer (~/path obfuscation, secret redaction)     │
-   │ └─ 128-byte UTF-8 Boundary Truncator                            │
-   └───────────────────────────────┬─────────────────────────────────┘
-                                   │ 8-byte LE Framed Binary Stream
-                                   ▼
-   ┌─────────────────────────────────────────────────────────────────┐
-   │ Native IPC Transport (core/discord-ipc.js)                      │
-   │ ├─ Windows: \\.\pipe\discord-ipc-{0..9}                         │
-   │ ├─ Unix:    $XDG_RUNTIME_DIR/discord-ipc-{0..9}                 │
-   │ └─ Linux Sandboxes: Flatpak (com.discordapp.Discord), Vesktop   │
-   └───────────────────────────────┬─────────────────────────────────┘
-                                   │ IPC Socket
-                                   ▼
-   ┌─────────────────────────────────────────────────────────────────┐
-   │ Discord Desktop Client (Rich Presence Gateway)                  │
-   └─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🚀 Key Technical Highlights
-
-1. **Pure Native Node.js (Zero Dependencies):** No `@xhayper/discord-rpc`, no heavy transpilers, no NPM dependency tree. Uses only standard `node:net`, `node:http`, and `node:buffer`.
-2. **8-Byte Little-Endian Binary Framing:**
-   - 4 bytes UInt32 LE: `Opcode` (0: Handshake, 1: Frame, 2: Close, 3: Ping, 4: Pong)
-   - 4 bytes UInt32 LE: `Length`
-   - UTF-8 JSON payload with chunk defragmentation accumulator.
-3. **Robust Cross-Platform IPC:**
-   - Windows Named Pipes (`\\.\pipe\discord-ipc-{0..9}` and `\\?\pipe\discord-ipc-{0..9}`).
-   - Unix Domain Sockets (macOS `/tmp`, Linux standard `$XDG_RUNTIME_DIR`, plus Flatpak and Vesktop paths).
-4. **Discord API Flood Guard (15s Debounce):** Discord rate-limits activity updates to once every 15 seconds. Acourd queues and flushes updates safely without socket drops.
-5. **Zero-Trust Privacy & Safety:**
-   - Automatic user home directory sanitization (`C:\Users\Ayzok\...` -> `~/...`).
-   - Redaction of `.env` configurations, SSH keys (`id_rsa`), and API tokens (`sk-...`, `ghp_...`).
-   - Hard 128-byte UTF-8 boundary enforcement avoiding multi-byte replacement character corruptions.
-
----
-
-## 📦 Installation & Usage
-
-### 1. Test Suite Verification
-Run the physical deterministic test suite (including mock Discord IPC server):
 ```bash
+git clone https://github.com/Acourd/vela-rpc.git
+cd vela-rpc
+
+# Verify the local test suite (6/6 suites, mock Discord IPC)
 node tests/run-all.js
-```
 
-### 2. Launch Background Daemon
-```bash
+# Start the background daemon
 node bin/acourd.js start
-```
 
-### 3. Check Status & Live Preview
-```bash
+# Check active status
 node bin/acourd.js status
 ```
 
-### 4. Render All Visual States Preview
+## Icon theme switch (dark / light / titanium)
+
+Every harness ships with three 512×512 PNG variants in `assets/styles/`: `classic` (Official Dark), `light` (Porcelain Light), and `titanium` (Titanium OLED). Switch the active icon style at runtime without restarting the daemon:
+
 ```bash
-node bin/acourd.js preview
+node bin/acourd.js config --icon-style titanium   # Titanium OLED
+node bin/acourd.js config --icon-style classic    # Official Dark
+node bin/acourd.js config --icon-style light      # Porcelain Light
 ```
 
----
+### Supported harnesses
 
-## 🔌 Adapter Configurations
+Icons in this table adapt automatically to GitHub's dark and light themes:
 
-### Claude Code (`.claude/settings.json`)
-Add the hooks generated by `adapters/claude-code/config-helper.js`:
+| Icon | Harness | Default model | Icon | Harness | Default model |
+| :---: | :--- | :--- | :---: | :--- | :--- |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/antigravity_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/antigravity_porcelain_light.png"><img src="assets/styles/antigravity_classic_dark.png" width="28" alt="Antigravity"></picture> | Antigravity 2.0 / IDE | Gemini 4 Neon | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/kimi_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/kimi_porcelain_light.png"><img src="assets/styles/kimi_classic_dark.png" width="28" alt="Kimi Code"></picture> | Kimi Code | Kimi K2 |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/claude_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/claude_porcelain_light.png"><img src="assets/styles/claude_classic_dark.png" width="28" alt="Claude Code"></picture> | Claude Code | Claude Opus 5.5 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/deepseek_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/deepseek_porcelain_light.png"><img src="assets/styles/deepseek_classic_dark.png" width="28" alt="DeepSeek"></picture> | DeepSeek | DeepSeek R2 |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/codex_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/codex_porcelain_light.png"><img src="assets/styles/codex_classic_dark.png" width="28" alt="Codex"></picture> | Codex | GPT-5.4 Codex | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/kiro_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/kiro_porcelain_light.png"><img src="assets/styles/kiro_classic_dark.png" width="28" alt="Kiro"></picture> | Kiro | Claude Sonnet 4.6 |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/opencode_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/opencode_porcelain_light.png"><img src="assets/styles/opencode_classic_dark.png" width="28" alt="OpenCode"></picture> | OpenCode | Claude Sonnet 4.6 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/mistral_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/mistral_porcelain_light.png"><img src="assets/styles/mistral_classic_dark.png" width="28" alt="Mistral Vibe"></picture> | Mistral Vibe | Devstral 2 |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/openchamber_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/openchamber_porcelain_light.png"><img src="assets/styles/openchamber_classic_dark.png" width="28" alt="OpenChamber"></picture> | OpenChamber | Claude Opus 5.5 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/droid_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/droid_porcelain_light.png"><img src="assets/styles/droid_classic_dark.png" width="28" alt="Factory Droid"></picture> | Factory Droid | Claude Opus 5.5 |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/hermes_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/hermes_porcelain_light.png"><img src="assets/styles/hermes_classic_dark.png" width="28" alt="Hermes"></picture> | Hermes | Hermes 4 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/amp_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/amp_porcelain_light.png"><img src="assets/styles/amp_classic_dark.png" width="28" alt="Amp"></picture> | Amp | Claude Opus 5.5 |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/gemini_cli_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/gemini_cli_porcelain_light.png"><img src="assets/styles/gemini_cli_classic_dark.png" width="28" alt="Gemini CLI"></picture> | Gemini CLI | Gemini 4 Neon | | | |
+
+## Adapter configuration
+
+<details>
+<summary>Claude Code (<code>~/.claude/settings.json</code>)</summary>
+
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "command": "node \"<path>/adapters/claude-code/hook.js\" SessionStart" }],
-    "UserPromptSubmit": [{ "command": "node \"<path>/adapters/claude-code/hook.js\" UserPromptSubmit" }],
-    "PreToolUse": [{ "command": "node \"<path>/adapters/claude-code/hook.js\" PreToolUse" }],
-    "PostToolUse": [{ "command": "node \"<path>/adapters/claude-code/hook.js\" PostToolUse" }],
-    "Stop": [{ "command": "node \"<path>/adapters/claude-code/hook.js\" Stop" }],
-    "SessionEnd": [{ "command": "node \"<path>/adapters/claude-code/hook.js\" SessionEnd" }]
+    "SessionStart": [{ "command": "node \"<path>/bin/acourd.js\" hook SessionStart" }],
+    "UserPromptSubmit": [{ "command": "node \"<path>/bin/acourd.js\" hook UserPromptSubmit" }],
+    "PreToolUse": [{ "command": "node \"<path>/bin/acourd.js\" hook PreToolUse" }],
+    "PostToolUse": [{ "command": "node \"<path>/bin/acourd.js\" hook PostToolUse" }],
+    "Stop": [{ "command": "node \"<path>/bin/acourd.js\" hook Stop" }],
+    "SessionEnd": [{ "command": "node \"<path>/bin/acourd.js\" hook SessionEnd" }]
   }
 }
 ```
 
-### Google Antigravity 2.0 (Hook / Sidecar)
-Invoke from workflow or sidecar runner:
+</details>
+
+<details>
+<summary>Antigravity 2.0 and Antigravity IDE</summary>
+
 ```bash
-# During reasoning:
-node adapters/antigravity/hook.js intent "Architectural design"
-
-# During verification:
-node adapters/antigravity/hook.js verify "Oracle exit code 0"
-
-# Run persistent workspace watcher:
-node -e "import('./adapters/antigravity/sidecar.js').then(m => new m.AntigravitySidecar().start())"
+node adapters/antigravity/hook.js intent "Architecture review"
+node adapters/antigravity/hook.js verify "6/6 suites passing"
 ```
 
----
+</details>
 
-## 📄 License
-MIT License. Free and open source for the agentic engineering community.
+<details>
+<summary>Hermes, Codex, OpenCode, OpenChamber, Kimi Code, DeepSeek and others</summary>
+
+Each harness exposes a standalone adapter under `adapters/<harness>/adapter.js` or can push events directly via CLI:
+
+```bash
+node bin/acourd.js set --source codex --task "API refactor" --model "GPT-5.4 Codex"
+node bin/acourd.js clear
+```
+
+</details>
+
+<details>
+<summary>Presets, custom Discord Client IDs and architecture notes</summary>
+
+- Presets: `autonomous` (clean title + active model), `telemetry`, `linear`, `studio`, `stealth`, `hacker`, `custom`. Apply with `node bin/acourd.js preset autonomous`.
+- Custom Discord App titles: register your own Discord Application IDs and set them with `--antigravity-id`, `--claude-id`, or `--hermes-id` in `node bin/acourd.js config`.
+- Transport: local HTTP loopback (`127.0.0.1:19452`) into native 8-byte LE Discord IPC (Windows Named Pipes and Unix Domain Sockets, including Flatpak and Vesktop), 15s rate-limit debounce, 90s multi-session priority lease, 5-minute stale-presence watchdog, and 128-byte UTF-8 safe truncation.
+
+</details>
+
+## License
+
+MIT
