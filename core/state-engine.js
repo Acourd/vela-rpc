@@ -74,7 +74,7 @@ function redactTextPrimitives(input) {
       return full;
     }
   );
-  sanitized = sanitized.replace(/(https?:\/\/)[^/\r\n@]+@/gi, '$1[REDACTED]@');
+  sanitized = sanitized.replace(/((?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p(?:[\t\r\n]*s)?):\/\/)[^/@]+@/gi, '$1[REDACTED]@');
   return sanitized;
 }
 
@@ -102,20 +102,22 @@ function redactJsonValue(val, depth = 0) {
 }
 
 /**
- * Redacts embedded valid JSON objects AND JSON-encoded string wrappers (including root
- * double-serialized JSON like `"{\"password\":\"...\"}"` and deeply nested wrappers).
+ * Redacts embedded valid JSON objects/arrays AND JSON-encoded string wrappers (including root
+ * arrays, double-serialized JSON like `"{\"password\":\"...\"}"`, and deeply nested structures).
  * Fail-closed: if nesting exceeds MAX_JSON_REDACT_DEPTH, redacts instead of passing raw content.
  */
 function redactEmbeddedJson(text, depth = 0) {
   if (typeof text !== 'string') return '';
   if (depth >= MAX_JSON_REDACT_DEPTH) return '[REDACTED_TOKEN]';
-  if (!text.includes('{') && !text.includes('"')) return text;
+  if (!text.includes('{') && !text.includes('[') && !text.includes('"')) return text;
 
   let out = '';
   let i = 0;
   while (i < text.length) {
-    if (text[i] === '{') {
-      let depthBrace = 0;
+    if (text[i] === '{' || text[i] === '[') {
+      const openCh = text[i];
+      const closeCh = openCh === '{' ? '}' : ']';
+      let depthContainer = 0;
       let inStr = false;
       let escaped = false;
       let end = -1;
@@ -125,10 +127,10 @@ function redactEmbeddedJson(text, depth = 0) {
         if (ch === '\\' && inStr) { escaped = true; continue; }
         if (ch === '"') { inStr = !inStr; continue; }
         if (!inStr) {
-          if (ch === '{') depthBrace += 1;
-          else if (ch === '}') {
-            depthBrace -= 1;
-            if (depthBrace === 0) { end = j; break; }
+          if (ch === openCh) depthContainer += 1;
+          else if (ch === closeCh) {
+            depthContainer -= 1;
+            if (depthContainer === 0) { end = j; break; }
           }
         }
       }
@@ -140,6 +142,25 @@ function redactEmbeddedJson(text, depth = 0) {
           i = end + 1;
           continue;
         } catch (_) {}
+      } else {
+        // Check for excessive unclosed nesting depth (fail-closed)
+        let peak = 0;
+        let cur = 0;
+        let s = false;
+        let esc = false;
+        for (let j = i; j < Math.min(text.length, i + 4096); j += 1) {
+          const ch = text[j];
+          if (esc) { esc = false; continue; }
+          if (ch === '\\' && s) { esc = true; continue; }
+          if (ch === '"') { s = !s; continue; }
+          if (!s && ch === openCh) {
+            cur += 1;
+            if (cur > peak) peak = cur;
+            if (depth + peak >= MAX_JSON_REDACT_DEPTH) {
+              return `${out}[REDACTED_TOKEN]`;
+            }
+          }
+        }
       }
     } else if (text[i] === '"') {
       // Check for a JSON-encoded string wrapper (e.g. root double-serialized JSON `"{\"password\":\"...\"}"`)
@@ -153,7 +174,7 @@ function redactEmbeddedJson(text, depth = 0) {
       }
       if (end !== -1) {
         const candidate = text.slice(i, end + 1);
-        if (candidate.includes('{') || candidate.includes('\\"') || candidate.includes('\\u')) {
+        if (candidate.includes('{') || candidate.includes('[') || candidate.includes('\\"') || candidate.includes('\\u')) {
           try {
             const unwrapped = JSON.parse(candidate);
             if (typeof unwrapped === 'string' && unwrapped !== candidate) {
@@ -178,7 +199,7 @@ function redactEmbeddedJson(text, depth = 0) {
 
 /**
  * Structurally detects and redacts ANY RFC 7515/7516/7519 JWT/JWS (including alg=none with empty signature)
- * and 5-segment JWE tokens (including headers with whitespace).
+ * and 5-segment JWE tokens (including empty-plaintext JWE and headers with whitespace).
  */
 function redactStructuralJwts(text) {
   const isJoseHeader = (seg) => {
@@ -193,9 +214,9 @@ function redactStructuralJwts(text) {
     return false;
   };
 
-  // 1. 5-segment JWE (header.encrypted_key.iv.ciphertext.tag)
+  // 1. 5-segment JWE (header.encrypted_key.iv.ciphertext.tag — ciphertext or encrypted_key may be empty)
   let out = text.replace(
-    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
+    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
     (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 

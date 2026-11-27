@@ -209,9 +209,12 @@ function stripTomlMultilineAndComments(raw) {
     if (state === 'MULTI_DOUBLE') {
       if (ch === '\\') { i += 2; continue; }
       if (next3 === '"""') {
+        // TOML v1.0: up to 2 trailing quotes before closing """ (total run of 3..5 quotes closes multiline string)
+        let qCount = 3;
+        while (qCount < 5 && raw[i + qCount] === '"') qCount += 1;
         state = 'NORMAL';
-        out += '""';
-        i += 3;
+        if (braceDepth === 0) out += '""';
+        i += qCount;
         continue;
       }
       i += 1;
@@ -220,9 +223,11 @@ function stripTomlMultilineAndComments(raw) {
 
     if (state === 'MULTI_SINGLE') {
       if (next3 === "'''") {
+        let qCount = 3;
+        while (qCount < 5 && raw[i + qCount] === "'") qCount += 1;
         state = 'NORMAL';
-        out += "''";
-        i += 3;
+        if (braceDepth === 0) out += "''";
+        i += qCount;
         continue;
       }
       i += 1;

@@ -84,6 +84,17 @@ export async function runEnterpriseHardeningTests() {
   const extremeSanitized = sanitizePrivacy(extremeDepth);
   assert.ok(!extremeSanitized.includes('EXTREME_DEPTH_CANARY_15'), 'Exceeding recursion depth must fail-closed and redact');
 
+  // Bracket array depth >= 12 fail-closed + empty-ciphertext JWE + CR/LF inside URL scheme & userinfo
+  const arrayDepthSanitized = sanitizePrivacy('['.repeat(12) + '"ARRAY_DEPTH_CANARY"' + ']'.repeat(12));
+  assert.ok(!arrayDepthSanitized.includes('ARRAY_DEPTH_CANARY'), 'Root nested array at MAX_JSON_REDACT_DEPTH must fail-closed and redact');
+
+  const emptyPlaintextJwe = `${Buffer.from('{"alg":"dir","enc":"A256GCM"}').toString('base64url')}..iv123456..tag123456`;
+  assert.strictEqual(sanitizePrivacy(emptyPlaintextJwe), '[REDACTED_TOKEN]', 'Empty-plaintext 5-segment JWE must be redacted');
+
+  const crlfUrlSanitized = sanitizePrivacy('https://audituser:\nURL_CANARY@host.test/x ht\ntps://u:\rP_CANARY@host.test/x');
+  assert.ok(!crlfUrlSanitized.includes('URL_CANARY'), 'HTTPS URL credential with LF must be redacted');
+  assert.ok(!crlfUrlSanitized.includes('P_CANARY'), 'HTTPS URL credential with LF in scheme and CR in password must be redacted');
+
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
   assert.ok(!serialized.includes('SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'), 'JWT must never reach Discord');
@@ -150,6 +161,14 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), 'Devstral 2');
+
+    // TOML multiline basic string ending with 4 quotes inside nested array MUST NOT swallow subsequent `model="gpt-5"`
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'config.toml'),
+      'prompts = [[\n"""\nmodel="CANARY_STRING"\n""""]]\nmodel="gpt-5"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5');
     // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
     assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
     // Claude broken JSONL / foreign session must return null
