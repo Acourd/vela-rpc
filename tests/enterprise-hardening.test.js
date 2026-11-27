@@ -263,13 +263,25 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
-    // Apostrophe inside plain scalar (`don't`) must not desync quotes, and auto-detect must not treat TOML inside YAML string as TOML
+    // Apostrophe/quote inside plain scalar (`don't`, `plain '`, multiline plain continuation) must never desync quotes
     fs.writeFileSync(
       path.join(tmpHome, '.hermes', 'config.yaml'),
       'notes: don\'t\nprompt: "a\'\nmodel: YAML_QUOTE_CANARY\n"\n',
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
+    assert.strictEqual(
+      extractModelFromTomlOrYaml('notes: plain \'\nprompt: "a\'\nmodel: YAML_QUOTE_CANARY\n"\n', null, 'yaml'),
+      null
+    );
+    assert.strictEqual(
+      extractModelFromTomlOrYaml('notes: plain \'\nprompt: "a\'\nmodel: YAML_QUOTE_CANARY\n"\n'),
+      null
+    );
+    assert.strictEqual(
+      extractModelFromTomlOrYaml('notes: plain\n  \'still plain\nprompt: "a\'\nmodel: YAML_QUOTE_CANARY\n"\n', null, 'yaml'),
+      null
+    );
     assert.strictEqual(
       extractModelFromTomlOrYaml('notes: |\n  model = "TOML_IN_YAML_AUTO_CANARY"\n'),
       null

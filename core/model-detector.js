@@ -412,19 +412,21 @@ function preprocessYaml(raw) {
   let out = '';
   let state = 'NORMAL'; // NORMAL | DOUBLE | SINGLE | COMMENT | BLOCK_SCALAR
   let quoteBuf = '';
-  let quoteMultiline = false;
   let flowDepth = 0;
   let blockParentIndent = -1;
+  let plainParentIndent = -1;
   let curLineIndent = 0;
   let atLineStart = true;
+  let expectingNode = true;
+  let afterMappingColon = false;
 
   const BLOCK_SCALAR_HEADER_RE = /^(?:[ \t]*(?:&[^\s,[\]{}]+|!(?:<[^>]*>|[^\s,[\]{}]*)))*[ \t]*[|>](?:[+-]?\d*|\d+[+-]?)[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/;
+  const NODE_PROP_RE = /^(?:&[^\s,[\]{}]+|!(?:<[^>]*>|[^\s,[\]{}]*))/;
 
   for (let i = 0; i < raw.length; ) {
     const ch = raw[i];
 
     if (state === 'BLOCK_SCALAR') {
-      // Scan current line to check indent vs blockParentIndent
       let lineEnd = i;
       while (lineEnd < raw.length && raw[lineEnd] !== '\n' && raw[lineEnd] !== '\r') lineEnd += 1;
       const lineText = raw.slice(i, lineEnd);
@@ -442,7 +444,27 @@ function preprocessYaml(raw) {
       state = 'NORMAL';
       atLineStart = true;
       curLineIndent = 0;
+      expectingNode = true;
+      afterMappingColon = false;
       continue;
+    }
+
+    if (state === 'NORMAL' && flowDepth === 0 && atLineStart && plainParentIndent >= 0) {
+      let lineEnd = i;
+      while (lineEnd < raw.length && raw[lineEnd] !== '\n' && raw[lineEnd] !== '\r') lineEnd += 1;
+      const lineText = raw.slice(i, lineEnd);
+      const isBlank = /^[ \t]*$/.test(lineText);
+      const indent = lineText.match(/^[ \t]*/)[0].replace(/\t/g, '  ').length;
+      if (isBlank || indent > plainParentIndent) {
+        out += '\n';
+        i = lineEnd;
+        if (raw[i] === '\r' && raw[i + 1] === '\n') i += 2;
+        else if (raw[i] === '\n' || raw[i] === '\r') i += 1;
+        atLineStart = true;
+        curLineIndent = 0;
+        continue;
+      }
+      plainParentIndent = -1;
     }
 
     if (state === 'COMMENT') {
@@ -450,6 +472,8 @@ function preprocessYaml(raw) {
         state = 'NORMAL';
         atLineStart = true;
         curLineIndent = 0;
+        expectingNode = true;
+        afterMappingColon = false;
         if (flowDepth === 0) out += ch;
       }
       i += 1;
@@ -460,12 +484,10 @@ function preprocessYaml(raw) {
       if (ch === '\\') {
         const next = raw[i + 1];
         if (next === '\r' && raw[i + 2] === '\n') {
-          quoteMultiline = true;
           i += 3;
           continue;
         }
         if (next === '\n' || next === '\r') {
-          quoteMultiline = true;
           i += 2;
           continue;
         }
@@ -476,16 +498,16 @@ function preprocessYaml(raw) {
       }
       if (ch === '"') {
         state = 'NORMAL';
+        expectingNode = false;
+        afterMappingColon = false;
         if (flowDepth === 0) {
           out += JSON.stringify(quoteBuf);
         }
         quoteBuf = '';
-        quoteMultiline = false;
         i += 1;
         continue;
       }
       if (ch === '\n' || ch === '\r') {
-        quoteMultiline = true;
         quoteBuf += ' ';
         if (ch === '\r' && raw[i + 1] === '\n') i += 2;
         else i += 1;
@@ -504,16 +526,16 @@ function preprocessYaml(raw) {
       }
       if (ch === "'") {
         state = 'NORMAL';
+        expectingNode = false;
+        afterMappingColon = false;
         if (flowDepth === 0) {
           out += JSON.stringify(quoteBuf);
         }
         quoteBuf = '';
-        quoteMultiline = false;
         i += 1;
         continue;
       }
       if (ch === '\n' || ch === '\r') {
-        quoteMultiline = true;
         quoteBuf += ' ';
         if (ch === '\r' && raw[i + 1] === '\n') i += 2;
         else i += 1;
@@ -528,6 +550,8 @@ function preprocessYaml(raw) {
     if (ch === '\n' || ch === '\r') {
       atLineStart = true;
       curLineIndent = 0;
+      expectingNode = true;
+      afterMappingColon = false;
       if (flowDepth === 0) out += ch;
       i += 1;
       continue;
@@ -538,54 +562,95 @@ function preprocessYaml(raw) {
       i += 1;
       continue;
     }
+    if (ch === ' ' || ch === '\t') {
+      if (flowDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
     if (ch === '#' && (atLineStart || raw[i - 1] === ' ' || raw[i - 1] === '\t')) {
       state = 'COMMENT';
       i += 1;
       continue;
     }
-    const isTokenStart = atLineStart || i === 0 || ' \t:,[{-'.includes(raw[i - 1]);
-    if (ch === '"' && isTokenStart) {
+    if (atLineStart && ch === '-' && (raw[i + 1] === ' ' || raw[i + 1] === '\t' || raw[i + 1] === '\n' || raw[i + 1] === '\r' || i + 1 === raw.length)) {
+      atLineStart = false;
+      expectingNode = true;
+      afterMappingColon = false;
+      if (flowDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+    if (expectingNode && (ch === '&' || ch === '!')) {
+      const propMatch = raw.slice(i).match(NODE_PROP_RE);
+      if (propMatch) {
+        atLineStart = false;
+        if (flowDepth === 0) out += propMatch[0];
+        i += propMatch[0].length;
+        continue;
+      }
+    }
+    if (ch === '"' && expectingNode) {
       atLineStart = false;
       state = 'DOUBLE';
       quoteBuf = '';
-      quoteMultiline = false;
       i += 1;
       continue;
     }
-    if (ch === "'" && isTokenStart) {
+    if (ch === "'" && expectingNode) {
       atLineStart = false;
       state = 'SINGLE';
       quoteBuf = '';
-      quoteMultiline = false;
       i += 1;
       continue;
     }
-    if ((ch === '{' || ch === '[') && isTokenStart) {
+    if ((ch === '{' || ch === '[') && expectingNode) {
       atLineStart = false;
       flowDepth += 1;
+      expectingNode = true;
+      afterMappingColon = false;
       i += 1;
       continue;
     }
     if ((ch === '}' || ch === ']') && flowDepth > 0) {
       flowDepth -= 1;
+      expectingNode = false;
       i += 1;
       continue;
     }
-    if (flowDepth === 0 && ch === ':' && (raw[i + 1] === ' ' || raw[i + 1] === '\t' || raw[i + 1] === '\n' || raw[i + 1] === '\r' || i + 1 === raw.length)) {
-      const rest = raw.slice(i + 1);
-      const blockMatch = rest.match(BLOCK_SCALAR_HEADER_RE);
-      if (blockMatch) {
-        out += ':\n';
-        blockParentIndent = curLineIndent;
-        state = 'BLOCK_SCALAR';
-        i += 1 + blockMatch[0].length;
-        atLineStart = true;
-        curLineIndent = 0;
-        continue;
+    if (flowDepth > 0 && ch === ',') {
+      expectingNode = true;
+      i += 1;
+      continue;
+    }
+    if (ch === ':' && (raw[i + 1] === ' ' || raw[i + 1] === '\t' || raw[i + 1] === '\n' || raw[i + 1] === '\r' || i + 1 === raw.length || (flowDepth > 0 && (raw[i + 1] === ',' || raw[i + 1] === '}' || raw[i + 1] === ']')))) {
+      if (flowDepth === 0) {
+        const rest = raw.slice(i + 1);
+        const blockMatch = rest.match(BLOCK_SCALAR_HEADER_RE);
+        if (blockMatch) {
+          out += ':\n';
+          blockParentIndent = curLineIndent;
+          state = 'BLOCK_SCALAR';
+          i += 1 + blockMatch[0].length;
+          atLineStart = true;
+          curLineIndent = 0;
+          expectingNode = true;
+          afterMappingColon = false;
+          continue;
+        }
+        out += ch;
       }
+      atLineStart = false;
+      expectingNode = true;
+      afterMappingColon = flowDepth === 0;
+      i += 1;
+      continue;
     }
 
+    if (afterMappingColon && expectingNode && flowDepth === 0) {
+      plainParentIndent = curLineIndent;
+    }
     atLineStart = false;
+    expectingNode = false;
     if (flowDepth === 0) out += ch;
     i += 1;
   }
