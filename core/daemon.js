@@ -283,13 +283,24 @@ export class AcourdDaemon extends EventEmitter {
         const now = Date.now();
         this.lastActivityEventAt = now;
 
-        const sessionKey = payload.sessionId ? `${canonicalSource}:${payload.sessionId}` : canonicalSource;
+        const rawSessionId = payload.sessionId || payload.session_id || null;
+        const sessionKey = rawSessionId ? `${canonicalSource}:${rawSessionId}` : canonicalSource;
         const normalizedEventState = String(payload.state || payload.cognitiveState || 'idle').toLowerCase();
         const isIdleEvent = normalizedEventState === 'idle';
 
-        // Enrich with real dynamic model detection if payload omitted model
-        const dynamicModel = payload.model || detectDynamicModel(harness.id, payload);
-        const enrichedPayload = dynamicModel ? { ...payload, model: dynamicModel } : payload;
+        // Migrate anonymous session entry when an identified session for the same harness arrives
+        if (rawSessionId && this.sessions.has(canonicalSource)) {
+          this.sessions.delete(canonicalSource);
+          if (this.activeLease && this.activeLease.sessionKey === canonicalSource) {
+            this.activeLease = null;
+          }
+        }
+
+        // Enrich with real dynamic model detection if payload omitted model (preserve explicit null)
+        const dynamicModel = payload.model !== undefined
+          ? payload.model
+          : detectDynamicModel(harness.id, payload);
+        const enrichedPayload = { ...payload, ...(rawSessionId ? { sessionId: rawSessionId } : {}), model: dynamicModel ?? null };
 
         // Rule 1: Session release / teardown with deterministic failover or clean clear
         if (payload.releaseLease) {

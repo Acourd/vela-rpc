@@ -47,6 +47,9 @@ export function sanitizePrivacy(text, options = {}) {
   if (typeof text !== 'string') return '';
   let sanitized = text;
 
+  // 0. Decode Unicode JSON escapes (\uXXXX) so obfuscated keys like "pass\u0077ord" cannot bypass redaction
+  sanitized = sanitized.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
   // 1. Obfuscate absolute home paths on Windows/Unix (handling single or double backslashes)
   // e.g. C:\Users\<Username>\..., C:\\Users\\<Username>\\..., or /home/<username>/... or /Users/<username>/...
   sanitized = sanitized.replace(
@@ -61,7 +64,7 @@ export function sanitizePrivacy(text, options = {}) {
   // 3. API keys, JWTs, Bearer tokens, URL credentials, and secret key-value / JSON assignments
   sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{4,}\b/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
   sanitized = sanitized.replace(
     /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*"(?:\\.|[^"\\])*"/gi,

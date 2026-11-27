@@ -111,7 +111,7 @@ export function translateHermesEvent(eventType, payload = {}, cwd = process.cwd(
   const effectiveCwd = safePayload.cwd || cwd || process.cwd();
   const project = safePayload.project || path.basename(effectiveCwd) || 'Workspace';
   const branch = safePayload.branch || detectGitBranch(effectiveCwd) || undefined;
-  const model = detectDynamicModel(harness.id, safePayload, options) || undefined;
+  const model = detectDynamicModel(harness.id, safePayload, options) || null;
   const type = String(eventType || safePayload.event || safePayload.status || 'working').toLowerCase();
 
   let state = COGNITIVE_STATES.THINKING;

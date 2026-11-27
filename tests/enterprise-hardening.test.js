@@ -19,7 +19,8 @@ import { detectDynamicModel } from '../core/model-detector.js';
 import { translateClaudeEvent } from '../adapters/claude-code/hook.js';
 import { translateCodexEvent } from '../adapters/codex/adapter.js';
 import { readHermesTelemetry } from '../adapters/hermes/adapter.js';
-import { readSelectedModel } from '../core/antigravity-telemetry.js';
+import { readSelectedModel, formatModelName } from '../core/antigravity-telemetry.js';
+import { readClaudeSessionModel } from '../adapters/claude-code/hook.js';
 import { AcourdDaemon } from '../core/daemon.js';
 import { AcourdClient } from '../adapters/generic-client.js';
 import { MockDiscordServer } from './mock-discord-ipc.js';
@@ -53,7 +54,10 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!jsonSanitized.includes('abc_secret_777'), 'Quoted JSON token must be redacted');
   assert.ok(!jsonSanitized.includes('space_tail_7'), 'Quoted JSON value with spaces must be fully redacted');
   assert.ok(!jsonSanitized.includes('"xy"'), 'Short quoted JSON secret must be redacted');
-  assert.ok(!jsonSanitized.includes('Bearer abc'), 'Short Bearer token must be redacted');
+  // Short-payload JWT (e30) & Unicode-escaped JSON keys ("pass\u0077ord") must be redacted
+  const shortJwtAndEscaped = sanitizePrivacy('JWT eyJhbGciOiJIUzI1NiJ9.e30.abc123def456 {"pass\\u0077ord":"prefix space_tail_7"}');
+  assert.ok(!shortJwtAndEscaped.includes('e30.abc123def456'), 'Short-payload JWT must be redacted');
+  assert.ok(!shortJwtAndEscaped.includes('space_tail_7'), 'Unicode-escaped JSON password key must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -106,8 +110,17 @@ export async function runEnterpriseHardeningTests() {
     // Unknown session falls back to quoted active profile [profiles."work"] (never [profiles."legacy"])
     assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-unknown' }, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
     assert.strictEqual(detectDynamicModel('opencode', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
-    // Inactive TOML profile MUST NOT be selected
+    // Inactive TOML profile with bracket inside quotes [profiles."inactive]name"] MUST NOT leak as root
+    fs.writeFileSync(path.join(tmpHome, '.vibe', 'config.toml'), '[profiles."inactive]name"]\nactive_model = "wrong-bracket-model"\n', 'utf8');
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);
+    // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
+    assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
+    // Claude broken JSONL / foreign session must return null
+    const brokenTranscript = path.join(tmpHome, 'broken.jsonl');
+    fs.writeFileSync(brokenTranscript, '{"model":"broken-line"\n{"session_id":"other-sess","model":"claude-opus-5-5"}\n', 'utf8');
+    assert.strictEqual(readClaudeSessionModel({ session_id: 'target-sess', transcript_path: brokenTranscript }), null);
+    // Adapter explicit null model preserved (not undefined) when unconfigured
+    assert.strictEqual(translateCodexEvent('working', { session_id: 'cx-null' }, tmpHome, { homeDir: path.join(tmpHome, 'empty'), env: {} }).model, null);
     // Zero static fabrication across ALL harnesses (including Claude & Antigravity):
     assert.strictEqual(detectDynamicModel('deepseek', {}, { homeDir: tmpHome, env: {} }), null);
     assert.strictEqual(detectDynamicModel('kimi-code', {}, { homeDir: tmpHome, env: {} }), null);

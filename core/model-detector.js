@@ -63,11 +63,62 @@ function extractModelFromJson(raw) {
 }
 
 function normalizeTomlSection(rawSection) {
-  return rawSection
-    .split('.')
-    .map((seg) => seg.trim().replace(/^["'](.*)["']$/, '$1').trim())
-    .filter(Boolean)
-    .join('.');
+  const segments = [];
+  let cur = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (let i = 0; i < rawSection.length; i += 1) {
+    const ch = rawSection[i];
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inDouble) {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === '.' && !inSingle && !inDouble) {
+      const s = cur.trim();
+      if (s) segments.push(s);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  const tail = cur.trim();
+  if (tail) segments.push(tail);
+  return segments.join('.');
+}
+
+function parseTomlSectionHeader(line) {
+  if (!line.startsWith('[') || !line.endsWith(']')) return null;
+  // Support [[array]] or [table], respecting quoted brackets like [profiles."inactive]name"]
+  const isDouble = line.startsWith('[[') && line.endsWith(']]');
+  const inner = isDouble ? line.slice(2, -2) : line.slice(1, -1);
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inDouble) { escaped = true; continue; }
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    else if ((ch === '[' || ch === ']') && !inSingle && !inDouble) return null;
+  }
+  if (inSingle || inDouble) return null;
+  return normalizeTomlSection(inner);
 }
 
 function stripTomlComment(line) {
@@ -107,9 +158,9 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
     const line = stripTomlComment(rawLine).trim();
     if (!line) continue;
 
-    const secMatch = line.match(/^\[([^\]]+)\]$/);
-    if (secMatch) {
-      currentSection = normalizeTomlSection(secMatch[1]);
+    const parsedHeader = parseTomlSectionHeader(line);
+    if (parsedHeader !== null) {
+      currentSection = parsedHeader;
       if (!sections[currentSection]) sections[currentSection] = {};
       continue;
     }
@@ -170,16 +221,25 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
 
     if (sessionId) {
       const sid = String(sessionId).trim();
+      const MAX_JSONL_BYTES = 4 * 1024 * 1024;
       for (const file of files) {
         const exactFileMatch = file.baseName === sid;
-        const content = readTextSafe(file.full, 65536);
+        let stat;
+        try { stat = fs.statSync(file.full); } catch (_) { continue; }
+        const wasTruncated = stat.size > MAX_JSONL_BYTES;
+        const content = readTextSafe(file.full, MAX_JSONL_BYTES);
         if (!content) continue;
+
+        let lines = content.split(/\r?\n/);
+        if (wasTruncated && lines.length > 0) {
+          lines = lines.slice(1); // discard partial leading line after tail seek
+        }
 
         let lastMatchedModel = null;
         let sawForeignSession = false;
         let lastUnattributedModel = null;
 
-        for (const rawLine of content.split(/\r?\n/)) {
+        for (const rawLine of lines) {
           const line = rawLine.trim();
           if (!line) continue;
           let obj;
@@ -201,13 +261,13 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
             } else {
               sawForeignSession = true;
             }
-          } else if (exactFileMatch && isUsableModel(lineModel)) {
+          } else if (exactFileMatch && !wasTruncated && isUsableModel(lineModel)) {
             lastUnattributedModel = lineModel.trim();
           }
         }
 
         if (lastMatchedModel) return lastMatchedModel;
-        if (exactFileMatch && !sawForeignSession && lastUnattributedModel) {
+        if (exactFileMatch && !wasTruncated && !sawForeignSession && lastUnattributedModel) {
           return lastUnattributedModel;
         }
       }

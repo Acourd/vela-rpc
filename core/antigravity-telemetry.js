@@ -102,17 +102,17 @@ function getProtoStr(fields, fn) {
  *      "claude-opus-4-6" -> "Claude Opus 4.6"
  */
 export function formatModelName(rawModel) {
-  if (!rawModel || typeof rawModel !== 'string') return 'Gemini AI';
+  if (!rawModel || typeof rawModel !== 'string') return null;
   const trimmed = rawModel.trim();
-  if (!trimmed) return 'Gemini AI';
+  if (!trimmed) return null;
 
   // If it's already a clean human display name with spaces (e.g. "Gemini 4 Neon (Medium)")
   if (trimmed.includes(' ') && !trimmed.startsWith('MODEL_')) {
-    return trimmed.replace(/\s*\((?:Minimal|Low|Medium|High|Xhigh|Max)\)\s*$/i, '').trim();
+    return trimmed.replace(/\s*\((?:Minimal|Low|Medium|High|Xhigh|Max)\)\s*$/i, '').trim() || null;
   }
 
   if (/^MODEL_PLACEHOLDER_/i.test(trimmed)) {
-    return 'Gemini AI';
+    return null;
   }
 
   const cleaned = trimmed.replace(/^MODEL_/i, '').replace(/_/g, '-');

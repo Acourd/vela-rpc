@@ -45,20 +45,24 @@ export function readClaudeSessionName(sessionId, sessionsDir = path.join(CLAUDE_
 }
 
 /**
- * Extracts ONLY the latest `"model": "..."` metadata key from the tail of a Claude session JSONL.
+ * Strictly parses Claude session JSONL line-by-line with JSON.parse and session correlation.
+ * Rejects broken JSONL lines and never attributes models from foreign sessions.
  */
 export function readClaudeSessionModel(payload = {}) {
+  const safePayload = (payload && typeof payload === 'object') ? payload : {};
+  const requestedSid = safePayload.sessionId || safePayload.session_id || null;
   const candidates = [];
-  if (payload.transcript_path && fs.existsSync(payload.transcript_path)) {
-    candidates.push(payload.transcript_path);
-  } else if (payload.session_id) {
+
+  if (safePayload.transcript_path && fs.existsSync(safePayload.transcript_path)) {
+    candidates.push({ filePath: safePayload.transcript_path, exactFileMatch: !requestedSid || path.basename(safePayload.transcript_path, '.jsonl') === String(requestedSid) });
+  } else if (requestedSid) {
     const projectsDir = path.join(CLAUDE_DIR, 'projects');
     if (fs.existsSync(projectsDir)) {
       try {
         for (const dir of fs.readdirSync(projectsDir)) {
-          const p = path.join(projectsDir, dir, `${payload.session_id}.jsonl`);
+          const p = path.join(projectsDir, dir, `${requestedSid}.jsonl`);
           if (fs.existsSync(p)) {
-            candidates.push(p);
+            candidates.push({ filePath: p, exactFileMatch: true });
             break;
           }
         }
@@ -66,19 +70,68 @@ export function readClaudeSessionModel(payload = {}) {
     }
   }
 
-  for (const filePath of candidates) {
+  const MAX_BYTES = 4 * 1024 * 1024;
+  for (const { filePath, exactFileMatch } of candidates) {
     let fd = null;
     try {
       const stat = fs.statSync(filePath);
-      const readSize = Math.min(stat.size, 32768);
-      if (readSize <= 0) continue;
+      if (stat.size <= 0) continue;
+      const wasTruncated = stat.size > MAX_BYTES;
+      const readSize = Math.min(stat.size, MAX_BYTES);
       fd = fs.openSync(filePath, 'r');
       const buf = Buffer.alloc(readSize);
       fs.readSync(fd, buf, 0, readSize, stat.size - readSize);
-      const text = buf.toString('utf8');
-      const matches = [...text.matchAll(/"model"\s*:\s*"([^"]+)"/g)];
-      if (matches.length > 0) {
-        return matches[matches.length - 1][1];
+      let lines = buf.toString('utf8').split(/\r?\n/);
+      if (wasTruncated && lines.length > 0) lines = lines.slice(1);
+
+      let lastMatchedModel = null;
+      let sawForeignSession = false;
+      let lastUnattributedModel = null;
+      const seenSids = new Set();
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        let obj;
+        try {
+          obj = JSON.parse(line);
+        } catch (_) {
+          continue; // ignore malformed/broken JSONL lines
+        }
+        if (!obj || typeof obj !== 'object') continue;
+
+        const lineSid = obj.session_id ?? obj.sessionId ?? null;
+        const rawModel = typeof obj.model === 'string'
+          ? obj.model
+          : (typeof obj.message?.model === 'string' ? obj.message.model : null);
+        const usableModel = (typeof rawModel === 'string' && rawModel.trim() && !['null', 'auto', 'none'].includes(rawModel.trim().toLowerCase()))
+          ? rawModel.trim()
+          : null;
+
+        if (requestedSid) {
+          const sid = String(requestedSid).trim();
+          if (lineSid !== null && String(lineSid).trim() !== '') {
+            if (String(lineSid).trim() === sid) {
+              if (usableModel) lastMatchedModel = usableModel;
+            } else {
+              sawForeignSession = true;
+            }
+          } else if (exactFileMatch && !wasTruncated && usableModel) {
+            lastUnattributedModel = usableModel;
+          }
+        } else {
+          if (lineSid) seenSids.add(String(lineSid));
+          if (usableModel) lastUnattributedModel = usableModel;
+        }
+      }
+
+      if (requestedSid) {
+        if (lastMatchedModel) return lastMatchedModel;
+        if (exactFileMatch && !wasTruncated && !sawForeignSession && lastUnattributedModel) {
+          return lastUnattributedModel;
+        }
+      } else if (seenSids.size <= 1 && lastUnattributedModel) {
+        return lastUnattributedModel;
       }
     } catch (_) {
     } finally {

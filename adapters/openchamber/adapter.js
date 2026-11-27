@@ -13,7 +13,7 @@ export function translateOpenChamberEvent(eventType, payload = {}, cwd = process
   const safePayload = (payload && typeof payload === 'object') ? payload : {};
   const harness = HARNESSES[HARNESS_IDS.OPENCHAMBER];
   const project = safePayload.project || path.basename(safePayload.cwd || cwd) || 'Workspace';
-  const model = detectDynamicModel(harness.id, safePayload, options) || undefined;
+  const model = detectDynamicModel(harness.id, safePayload, options) || null;
   const type = String(eventType || safePayload.status || 'working').toLowerCase();
 
   let state = COGNITIVE_STATES.THINKING;

@@ -14,7 +14,7 @@ export function translateCodexEvent(eventType, payload = {}, cwd = process.cwd()
   const safePayload = (payload && typeof payload === 'object') ? payload : {};
   const harness = HARNESSES[HARNESS_IDS.CODEX];
   const project = safePayload.project || path.basename(safePayload.cwd || cwd) || 'Workspace';
-  const model = detectDynamicModel(harness.id, safePayload, options) || undefined;
+  const model = detectDynamicModel(harness.id, safePayload, options) || null;
   const type = String(eventType || safePayload.type || 'working').toLowerCase();
 
   let state = COGNITIVE_STATES.THINKING;

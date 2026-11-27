@@ -15,7 +15,7 @@ export function translateDeepSeekEvent(eventType, payload = {}, cwd = process.cw
   const effectiveCwd = safePayload.cwd || cwd || process.cwd();
   const project = safePayload.project || path.basename(effectiveCwd) || 'Workspace';
   const branch = safePayload.branch || detectGitBranch(effectiveCwd) || undefined;
-  const model = detectDynamicModel(harness.id, safePayload, options) || undefined;
+  const model = detectDynamicModel(harness.id, safePayload, options) || null;
   const type = String(eventType || safePayload.status || 'working').toLowerCase();
 
   let state = COGNITIVE_STATES.THINKING;
