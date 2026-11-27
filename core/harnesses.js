@@ -18,7 +18,6 @@ export const HARNESS_IDS = Object.freeze({
   MISTRAL_VIBE: 'mistral-vibe',
   FACTORY_DROID: 'factory-droid',
   AMP: 'amp',
-  GEMINI_CLI: 'gemini-cli',
 });
 
 export const HARNESSES = Object.freeze({
@@ -28,7 +27,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'antigravity_2_logo',
     assetFile: 'assets/antigravity_logo.png',
-    defaultModel: 'Gemini 4 Neon',
+    defaultModel: 'Gemini 4 Argon',
     category: 'Agent Manager (Desktop)',
   },
   [HARNESS_IDS.ANTIGRAVITY_IDE]: {
@@ -46,7 +45,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1472915568930848829',
     assetKey: 'claude-code',
     assetFile: 'assets/claude_logo.png',
-    defaultModel: 'Claude Opus 4.6',
+    defaultModel: 'Claude Fable 5.2',
     category: 'CLI & IDE Agent (Anthropic)',
   },
   [HARNESS_IDS.CODEX]: {
@@ -55,7 +54,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'codex_logo',
     assetFile: 'assets/codex_logo.png',
-    defaultModel: 'GPT-5.4 Codex',
+    defaultModel: 'GPT-6.2 Sol',
     category: 'CLI & Desktop Agent (OpenAI)',
   },
   [HARNESS_IDS.OPENCODE]: {
@@ -64,7 +63,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'opencode_logo',
     assetFile: 'assets/opencode_logo.png',
-    defaultModel: 'Claude Sonnet 4.6',
+    defaultModel: 'Claude Sonnet 5.5',
     category: 'Open-Source Terminal Agent',
   },
   [HARNESS_IDS.OPENCHAMBER]: {
@@ -73,7 +72,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'openchamber_logo',
     assetFile: 'assets/openchamber_logo.png',
-    defaultModel: 'Claude Sonnet 4.6',
+    defaultModel: 'Claude Opus 5.5',
     category: 'Agentic Development Workspace',
   },
   [HARNESS_IDS.HERMES]: {
@@ -82,7 +81,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'hermes_logo',
     assetFile: 'assets/hermes_logo.png',
-    defaultModel: 'Hermes 4',
+    defaultModel: 'Hermes 4.3',
     category: 'Nous Research Agent Framework',
   },
   [HARNESS_IDS.KIMI_CODE]: {
@@ -91,7 +90,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'kimi_logo',
     assetFile: 'assets/kimi_logo.png',
-    defaultModel: 'Kimi K2',
+    defaultModel: 'Kimi K3.1 Pro',
     category: 'Moonshot AI Terminal Agent',
   },
   [HARNESS_IDS.DEEPSEEK]: {
@@ -100,7 +99,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'deepseek_logo',
     assetFile: 'assets/deepseek_logo.png',
-    defaultModel: 'DeepSeek R2',
+    defaultModel: 'DeepSeek V4 Pro',
     category: 'DeepSeek Coding Harness & CLI',
   },
   [HARNESS_IDS.KIRO]: {
@@ -109,7 +108,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'kiro_logo',
     assetFile: 'assets/kiro_logo.png',
-    defaultModel: 'Claude Sonnet 4.6',
+    defaultModel: 'Claude Sonnet 5.5',
     category: 'AWS Spec-Driven Agentic IDE',
   },
   [HARNESS_IDS.MISTRAL_VIBE]: {
@@ -127,7 +126,7 @@ export const HARNESSES = Object.freeze({
     defaultClientId: '1440730997460172810',
     assetKey: 'droid_logo',
     assetFile: 'assets/droid_logo.png',
-    defaultModel: 'Claude Opus 5.5',
+    defaultModel: 'GPT-6 Astra',
     category: 'Factory AI Autonomous Droids',
   },
   [HARNESS_IDS.AMP]: {
@@ -138,15 +137,6 @@ export const HARNESSES = Object.freeze({
     assetFile: 'assets/amp_logo.png',
     defaultModel: 'Claude Opus 5.5',
     category: 'Sourcegraph Agentic Coding Tool',
-  },
-  [HARNESS_IDS.GEMINI_CLI]: {
-    id: HARNESS_IDS.GEMINI_CLI,
-    displayName: 'Gemini CLI',
-    defaultClientId: '1440730997460172810',
-    assetKey: 'gemini_cli_logo',
-    assetFile: 'assets/gemini_cli_logo.png',
-    defaultModel: 'Gemini 4 Neon',
-    category: 'Google Open-Source Terminal Agent',
   },
 });
 
@@ -167,7 +157,6 @@ export function resolveHarness(payload = {}) {
   if (raw.includes('mistral') || raw.includes('vibe')) return HARNESSES[HARNESS_IDS.MISTRAL_VIBE];
   if (raw.includes('droid') || raw.includes('factory')) return HARNESSES[HARNESS_IDS.FACTORY_DROID];
   if (raw.includes('amp') || raw.includes('sourcegraph')) return HARNESSES[HARNESS_IDS.AMP];
-  if (raw.includes('gemini-cli') || raw.includes('gemini cli')) return HARNESSES[HARNESS_IDS.GEMINI_CLI];
   if (raw.includes('claude')) return HARNESSES[HARNESS_IDS.CLAUDE_CODE];
   if (raw.includes('antigravity') && raw.includes('ide')) return HARNESSES[HARNESS_IDS.ANTIGRAVITY_IDE];
   return HARNESSES[HARNESS_IDS.ANTIGRAVITY_2];

@@ -160,8 +160,8 @@ export async function runEnterpriseHardeningTests() {
   assert.strictEqual(resolveHarness(undefined).id, 'antigravity-2');
   assert.strictEqual(resolveHarness(42).id, 'antigravity-2');
   assert.strictEqual(resolveHarness('').id, 'antigravity-2');
-  assert.strictEqual(Object.keys(HARNESSES).length, 14);
-  console.log('✓ Null-safe resolveHarness() & 14-harness registry verified');
+  assert.strictEqual(Object.keys(HARNESSES).length, 13);
+  console.log('✓ Null-safe resolveHarness() & 13-harness registry verified');
 
   // 3. Dynamic model detection (session-correlated JSONL, profile-aware TOML, zero static fabrication)
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'vela-model-test-'));

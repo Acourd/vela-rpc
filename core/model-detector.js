@@ -973,11 +973,6 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
       extractModelFromJson(readConfigFileFromStart(path.join(home, '.config', 'amp', 'settings.json'))) ||
       env.AMP_MODEL ||
       null;
-  } else if (id === 'gemini-cli') {
-    rawModel =
-      extractModelFromJson(readConfigFileFromStart(path.join(home, '.gemini', 'settings.json'))) ||
-      env.GEMINI_MODEL ||
-      null;
   }
 
   return isUsableModel(rawModel) ? formatModelName(rawModel) : null;
