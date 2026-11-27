@@ -63,7 +63,7 @@ function redactTextPrimitives(input) {
   sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
   sanitized = sanitized.replace(
-    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`,}\]]+)/g,
+    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*|'(?:\\.|[^'\\])*|[^\s"'`,}\]]+)/g,
     (full, q, rawKey, sep, rawVal) => {
       const decodedKey = decodeUnicodeEscapes(rawKey);
       if (SECRET_KEY_PATTERN.test(decodedKey)) {
@@ -145,27 +145,26 @@ function redactEmbeddedJson(text, depth = 0) {
           i = end + 1;
           continue;
         } catch (_) {}
-      } else {
-        // Check for excessive unclosed mixed `{` and `[` nesting depth across full bounded payload (fail-closed)
-        let peak = 0;
-        let cur = 0;
-        let s = false;
-        let esc = false;
-        for (let j = i; j < text.length; j += 1) {
-          const ch = text[j];
-          if (esc) { esc = false; continue; }
-          if (ch === '\\' && s) { esc = true; continue; }
-          if (ch === '"') { s = !s; continue; }
-          if (!s) {
-            if (ch === '{' || ch === '[') {
-              cur += 1;
-              if (cur > peak) peak = cur;
-              if (depth + peak >= MAX_JSON_REDACT_DEPTH) {
-                return `${out}[REDACTED_TOKEN]`;
-              }
-            } else if ((ch === '}' || ch === ']') && cur > 0) {
-              cur -= 1;
+      }
+      // Run fail-closed combined `{` and `[` depth check when container is unclosed OR invalid JSON
+      let peak = 0;
+      let cur = 0;
+      let s = false;
+      let esc = false;
+      for (let j = i; j < text.length; j += 1) {
+        const ch = text[j];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && s) { esc = true; continue; }
+        if (ch === '"') { s = !s; continue; }
+        if (!s) {
+          if (ch === '{' || ch === '[') {
+            cur += 1;
+            if (cur > peak) peak = cur;
+            if (depth + peak >= MAX_JSON_REDACT_DEPTH) {
+              return `${out}[REDACTED_TOKEN]`;
             }
+          } else if ((ch === '}' || ch === ']') && cur > 0) {
+            cur -= 1;
           }
         }
       }

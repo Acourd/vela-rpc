@@ -95,9 +95,12 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!crlfUrlSanitized.includes('URL_CANARY'), 'HTTPS URL credential with LF must be redacted');
   assert.ok(!crlfUrlSanitized.includes('P_CANARY'), 'HTTPS URL credential with LF in scheme and CR in password must be redacted');
 
-  // Mixed unclosed container depth >= 12 even with 8,500-char padding
-  const mixedDepthSanitized = sanitizePrivacy('[{"x":'.repeat(6) + ' '.repeat(8500) + '"MIXED_DEPTH_CANARY"');
-  assert.ok(!mixedDepthSanitized.includes('MIXED_DEPTH_CANARY'), 'Mixed unclosed container depth >= 12 with >8KB padding must fail-closed');
+  // Mixed depth 12 with incompatible outer closing bracket + 8,501 spaces, AND unclosed quoted password
+  const mixedIncompatible = sanitizePrivacy('[{"x":'.repeat(6) + ' '.repeat(8501) + '"MIXED_DEPTH_CANARY"]');
+  assert.ok(!mixedIncompatible.includes('MIXED_DEPTH_CANARY'), 'Mixed depth 12 with incompatible closing bracket must fail-closed');
+
+  const unclosedPwd = sanitizePrivacy('{"password":"CLOUD_CANARY_UNCLOSED');
+  assert.ok(!unclosedPwd.includes('CLOUD_CANARY_UNCLOSED'), 'Unclosed quoted JSON secret value must be redacted');
 
   const schemeTabAndMultiAt = sanitizePrivacy('https\t://alice:URL_CANARY@host.test/x https://alice:PREFIX@PASSWORD_SUFFIX_CANARY@host.test/x https://u s:P_SPACE@host.test/x');
   assert.ok(!schemeTabAndMultiAt.includes('URL_CANARY'), 'URL scheme with tab before colon must be redacted');
