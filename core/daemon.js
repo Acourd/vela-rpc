@@ -11,9 +11,11 @@ import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DAEMON_CONFIG, DEFAULT_CLIENT_ID } from './constants.js';
+import { DAEMON_CONFIG, DEFAULT_CLIENT_ID, KNOWN_CLIENT_IDS } from './constants.js';
 import { DiscordIPC } from './discord-ipc.js';
 import { StateEngine } from './state-engine.js';
+import { ConfigManager, PRESETS } from './templates.js';
+import { resolveHarness } from './harnesses.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,16 +26,26 @@ export class AcourdDaemon extends EventEmitter {
     this.port = options.port || DAEMON_CONFIG.DEFAULT_PORT;
     this.host = options.host || DAEMON_CONFIG.DEFAULT_HOST;
     this.clientId = options.clientId || DEFAULT_CLIENT_ID;
+    this.explicitClientId = Boolean(options.clientId || options.customIpcPath);
     this.customIpcPath = options.customIpcPath || null;
     this.debounceMs = options.debounceMs;
     this.stealthMode = options.stealthMode || false;
     this.pidFile = options.pidFile !== undefined ? options.pidFile : null;
+    this.configPath = options.configPath !== undefined
+      ? options.configPath
+      : (this.pidFile === false ? false : undefined);
 
     this.server = null;
     this.ipc = null;
+    this.configManager = null;
     this.stateEngine = null;
     this.reconnectTimer = null;
+    this.staleWatchdogTimer = null;
+    this.staleTimeoutMs = options.staleTimeoutMs ?? (5 * 60 * 1000);
+    this.lastActivityEventAt = 0;
+    this.sessions = new Map(); // sessionKey -> { source, lastSeenAt }
     this.isShuttingDown = false;
+    this.activeLease = null;
     this.startTime = Date.now();
   }
 
@@ -41,9 +53,11 @@ export class AcourdDaemon extends EventEmitter {
    * Starts both the HTTP server and Discord IPC connection.
    */
   async start() {
+    this.configManager = new ConfigManager({ configPath: this.configPath });
     this.stateEngine = new StateEngine({
       debounceMs: this.debounceMs,
       stealthMode: this.stealthMode,
+      config: this.configManager.getEffective(),
     });
 
     this.ipc = new DiscordIPC({
@@ -66,6 +80,7 @@ export class AcourdDaemon extends EventEmitter {
     this._setupIpcEvents();
     await this._startHttpServer();
     this._writePidFile();
+    this._startStaleWatchdog();
 
     // Connect to Discord (non-blocking for HTTP daemon start)
     this._connectIpc().catch(() => {
@@ -86,8 +101,10 @@ export class AcourdDaemon extends EventEmitter {
 
     this.ipc.on('ready', () => {
       // If we have an active or pending activity, send it now
-      if (this.stateEngine && this.stateEngine.activeActivity) {
-        this.ipc.setActivity(this.stateEngine.activeActivity);
+      if (this.stateEngine && this.stateEngine.activeActivity && this.ipc && this.ipc.connected && this.ipc.ready) {
+        try {
+          this.ipc.setActivity(this.stateEngine.activeActivity);
+        } catch (_) {}
       }
     });
 
@@ -129,6 +146,37 @@ export class AcourdDaemon extends EventEmitter {
     }
   }
 
+  _startStaleWatchdog() {
+    if (this.staleWatchdogTimer || !this.staleTimeoutMs || this.staleTimeoutMs <= 0) return;
+    const intervalMs = Math.min(30_000, Math.max(5_000, Math.floor(this.staleTimeoutMs / 4)));
+    this.staleWatchdogTimer = setInterval(() => {
+      const now = Date.now();
+      // Prune expired sessions
+      for (const [key, sess] of this.sessions.entries()) {
+        if (now - sess.lastSeenAt > this.staleTimeoutMs) {
+          this.sessions.delete(key);
+        }
+      }
+      // Clear ghost presence if no events received within staleTimeoutMs
+      if (this.lastActivityEventAt > 0 && this.stateEngine?.activeActivity && (now - this.lastActivityEventAt) > this.staleTimeoutMs) {
+        if (this.ipc && this.ipc.ready) {
+          try { this.ipc.clearActivity(); } catch (_) {}
+        }
+        this.stateEngine.clear();
+        this.activeLease = null;
+        this.lastActivityEventAt = 0;
+      }
+    }, intervalMs);
+    this.staleWatchdogTimer.unref?.();
+  }
+
+  _stopStaleWatchdog() {
+    if (this.staleWatchdogTimer) {
+      clearInterval(this.staleWatchdogTimer);
+      this.staleWatchdogTimer = null;
+    }
+  }
+
   _startHttpServer() {
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
@@ -154,6 +202,16 @@ export class AcourdDaemon extends EventEmitter {
       return;
     }
 
+    // Allow local studio/preview.html to communicate with loopback daemon
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     let pathname;
     try {
       const parsedUrl = new URL(req.url, `http://${this.host}:${this.port}`);
@@ -176,6 +234,7 @@ export class AcourdDaemon extends EventEmitter {
           pipePath: this.ipc ? this.ipc.currentPath : null,
         },
         state: this.stateEngine ? this.stateEngine.currentState : 'unknown',
+        config: this.configManager ? this.configManager.getEffective() : null,
         activity: this.stateEngine ? this.stateEngine.activeActivity : null,
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -183,9 +242,91 @@ export class AcourdDaemon extends EventEmitter {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/config') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true,
+        config: this.configManager.getEffective(),
+        presets: PRESETS,
+      }));
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/config') {
+      this._parseJsonBody(req, res, (patch) => {
+        const effective = this.configManager.update(patch);
+        const dispatchRes = this.stateEngine.setConfig(effective, true);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: true,
+          config: effective,
+          activity: this.stateEngine.activeActivity,
+          dispatched: Boolean(dispatchRes && dispatchRes.sent),
+        }));
+      });
+      return;
+    }
+
     if (req.method === 'POST' && (pathname === '/event' || pathname === '/activity')) {
-      this._parseJsonBody(req, res, (payload) => {
-        const result = this.stateEngine.processEvent(payload);
+      this._parseJsonBody(req, res, async (payload) => {
+        // Drop legacy pre-restart sidecar frames ("Active in Antigravity 2.0" / project "rpc")
+        if (payload.details === 'Active in Antigravity 2.0' && payload.project === 'rpc') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ignored: 'legacy_sidecar' }));
+          return;
+        }
+
+        const source = payload.source || (
+          String(payload.agentName || '').toLowerCase().includes('claude') ? 'claude' : 'antigravity'
+        );
+        const now = Date.now();
+        this.lastActivityEventAt = now;
+
+        const sessionKey = payload.sessionId ? `${source}:${payload.sessionId}` : source;
+        if (payload.releaseLease) {
+          this.sessions.delete(sessionKey);
+          const hasSiblingSession = [...this.sessions.values()].some((s) => s.source === source);
+          if (!hasSiblingSession && this.activeLease && this.activeLease.source === source) {
+            this.activeLease = null;
+          }
+        } else {
+          this.sessions.set(sessionKey, { source, lastSeenAt: now });
+        }
+
+        // Prevent idle background heartbeats from hijacking an actively working sibling agent
+        const isIdleHeartbeat = Boolean(payload.isHeartbeat) && (!payload.state || payload.state === 'idle');
+        if (isIdleHeartbeat && this.activeLease && this.activeLease.source !== source && now < this.activeLease.expiresAt) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, deferred: true, activeSource: this.activeLease.source }));
+          return;
+        }
+
+        if (!payload.releaseLease && (source === 'claude' || (payload.state && payload.state !== 'idle'))) {
+          this.activeLease = { source, expiresAt: now + 90_000 };
+        }
+
+        const harness = resolveHarness(payload);
+        const configuredIds = this.configManager?.getEffective()?.clientIds || {};
+        const targetClientId = payload.clientId
+          || configuredIds[harness.id]
+          || configuredIds[source]
+          || (source === 'claude' ? KNOWN_CLIENT_IDS.CLAUDE_CODE : (process.env.DISCORD_CLIENT_ID || harness.defaultClientId));
+
+        const needsClientSwitch = !this.explicitClientId && this.ipc && this.ipc.clientId !== targetClientId;
+
+        // Process event first so stateEngine.activeActivity is ready when the new IPC handshake finishes
+        const result = this.stateEngine.processEvent(
+          needsClientSwitch ? { ...payload, forceImmediate: true } : payload
+        );
+
+        if (needsClientSwitch) {
+          this.ipc.clientId = targetClientId;
+          if (this.ipc.connected) {
+            this.ipc.disconnect();
+          }
+          this._connectIpc().catch(() => {});
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, ...result }));
       });
@@ -280,6 +421,7 @@ export class AcourdDaemon extends EventEmitter {
   async stop() {
     this.isShuttingDown = true;
     this._clearReconnect();
+    this._stopStaleWatchdog();
 
     if (this.stateEngine) {
       this.stateEngine.destroy();

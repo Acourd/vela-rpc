@@ -10,6 +10,11 @@ import {
   STATE_METADATA,
   DISCORD_LIMITS,
 } from './constants.js';
+import {
+  LOCALIZED_STATES,
+  renderTemplate,
+  resolveEffectiveConfig,
+} from './templates.js';
 
 /**
  * Safely truncates a string to at most maxBytes without splitting multi-byte UTF-8 code points
@@ -70,6 +75,10 @@ export class StateEngine extends EventEmitter {
     super();
     this.debounceMs = options.debounceMs ?? DISCORD_LIMITS.RATE_LIMIT_DEBOUNCE_MS;
     this.stealthMode = Boolean(options.stealthMode);
+    this.config = resolveEffectiveConfig({
+      ...(options.config || {}),
+      ...(options.stealthMode !== undefined ? { stealthMode: Boolean(options.stealthMode) } : {}),
+    });
     this.agentName = options.agentName || 'AI Agent';
     this.sessionStartTime = Math.floor(Date.now() / 1000);
 
@@ -78,12 +87,31 @@ export class StateEngine extends EventEmitter {
     this.pendingActivity = null;
     this.debounceTimer = null;
     this.activeActivity = null;
+    this.lastDispatchedKey = null;
+    this.lastEvent = {};
     this.currentContext = {
       project: 'Workspace',
       branch: 'main',
       tool: null,
       details: null,
+      task: null,
+      chatTitle: null,
+      model: null,
+      stepCount: 0,
     };
+  }
+
+  /**
+   * Dynamically updates template/preset configuration and re-renders active presence.
+   */
+  setConfig(newConfig = {}, forceDispatch = true) {
+    this.config = resolveEffectiveConfig(newConfig);
+    this.stealthMode = Boolean(this.config.stealthMode);
+    if (this.activeActivity && forceDispatch) {
+      const rebuilt = this.buildActivityPayload(this.lastEvent);
+      return this.queueActivity(rebuilt, true);
+    }
+    return { queued: false, sent: false };
   }
 
   /**
@@ -96,11 +124,16 @@ export class StateEngine extends EventEmitter {
       : COGNITIVE_STATES.IDLE;
 
     this.currentState = normalizedState;
+    this.lastEvent = { ...event };
 
     if (event.project !== undefined) this.currentContext.project = event.project;
     if (event.branch !== undefined) this.currentContext.branch = event.branch;
     if (event.tool !== undefined) this.currentContext.tool = event.tool;
     if (event.details !== undefined) this.currentContext.details = event.details;
+    if (event.task !== undefined) this.currentContext.task = event.task;
+    if (event.chatTitle !== undefined) this.currentContext.chatTitle = event.chatTitle;
+    if (event.model !== undefined) this.currentContext.model = event.model;
+    if (event.stepCount !== undefined) this.currentContext.stepCount = event.stepCount;
     if (event.agentName) this.agentName = event.agentName;
     if (event.resetTimer) this.sessionStartTime = Math.floor(Date.now() / 1000);
 
@@ -112,38 +145,74 @@ export class StateEngine extends EventEmitter {
    * Assembles a validated, sanitized, truncated Discord Rich Presence activity object.
    */
   buildActivityPayload(event = {}) {
+    const cfg = this.config;
+    const langTable = LOCALIZED_STATES[cfg.lang] || LOCALIZED_STATES.en;
+    const localized = langTable[this.currentState] || langTable[COGNITIVE_STATES.IDLE];
     const meta = STATE_METADATA[this.currentState] || STATE_METADATA[COGNITIVE_STATES.IDLE];
-    const project = this.currentContext.project || 'Project';
-    const branch = this.currentContext.branch ? ` • ${this.currentContext.branch}` : '';
 
-    let detailsText = '';
-    if (event.details) {
-      detailsText = `${meta.emoji} ${event.details}`;
-    } else if (this.currentState === COGNITIVE_STATES.TOOL_CALL && this.currentContext.tool) {
-      detailsText = `${meta.emoji} Executing: ${this.currentContext.tool}`;
-    } else {
-      detailsText = `${meta.emoji} ${meta.label}`;
+    const effectiveStealth = Boolean(this.stealthMode || cfg.stealthMode);
+    const project = effectiveStealth ? 'Private Workspace' : (this.currentContext.project || 'Workspace');
+    const branch = effectiveStealth ? '' : (this.currentContext.branch || '');
+    const shortAgent = this.agentName.replace(/^Google\s+/i, '').replace(/\s+2\.0$/i, '').trim() || 'AI';
+    const chatTitle = effectiveStealth ? '' : (event.chatTitle || this.currentContext.chatTitle || '');
+    const model = event.model || this.currentContext.model || (shortAgent.toLowerCase().includes('claude') ? 'Claude' : 'Gemini AI');
+    const conciseStatus = this.currentState === COGNITIVE_STATES.IDLE
+      ? (cfg.lang === 'es' ? 'Idle' : 'Idle')
+      : (cfg.lang === 'es' ? 'Working' : 'Working');
+    const steps = this.currentContext.stepCount > 0 ? `${this.currentContext.stepCount} steps` : '';
+
+    let rawTask = event.task || event.details || '';
+    if (!rawTask && this.currentState === COGNITIVE_STATES.TOOL_CALL && this.currentContext.tool) {
+      rawTask = cfg.lang === 'es'
+        ? `Ejecutando ${this.currentContext.tool}`
+        : `Executing: ${this.currentContext.tool}`;
     }
 
-    let stateText = event.stateText !== undefined ? event.stateText : `${project}${branch}`;
+    const templateVars = {
+      project,
+      branch,
+      chat: chatTitle,
+      chat_or_task: chatTitle || rawTask || localized.label,
+      model,
+      status: conciseStatus,
+      steps,
+      task: rawTask,
+      state: localized.label,
+      task_or_state: rawTask || localized.label,
+      emoji: cfg.showEmojis ? localized.emoji : '',
+      agent: shortAgent,
+      tool: this.currentContext.tool || '',
+    };
+
+    let detailsText = renderTemplate(cfg.detailsTemplate, templateVars);
+    let stateText = event.stateText !== undefined
+      ? event.stateText
+      : renderTemplate(cfg.stateTemplate, templateVars);
 
     // Apply privacy sanitization and 128-byte truncation
-    detailsText = truncateUtf8(sanitizePrivacy(detailsText, { stealthMode: this.stealthMode }));
-    stateText = truncateUtf8(sanitizePrivacy(stateText, { stealthMode: this.stealthMode }));
+    detailsText = truncateUtf8(sanitizePrivacy(detailsText, { stealthMode: effectiveStealth }));
+    stateText = truncateUtf8(sanitizePrivacy(stateText, { stealthMode: effectiveStealth }));
 
-    const largeImageKey = event.largeImage || 'acourd_logo';
-    const rawLargeText = event.largeText || `${this.agentName} • ${meta.label}`;
+    let defaultLargeImage = 'antigravity_logo';
+    if (this.agentName && this.agentName.toLowerCase().includes('claude')) {
+      defaultLargeImage = 'claude-code';
+    }
+    const largeImageKey = event.largeImage || defaultLargeImage;
+    const rawLargeText = event.largeText || `${this.agentName} • ${localized.label}`;
     const largeText = truncateUtf8(rawLargeText);
     const smallImageKey = meta.icon || 'idle';
-    const rawSmallText = meta.description || meta.label;
+    const rawSmallText = localized.description || meta.description || localized.label;
     const smallText = truncateUtf8(rawSmallText);
 
     const activity = {
-      timestamps: {
-        start: this.sessionStartTime,
-      },
       assets: {},
     };
+
+    if (cfg.showElapsed) {
+      activity.timestamps = {
+        start: this.sessionStartTime,
+      };
+    }
 
     // Discord RPC requires string fields to be at least 2 characters if present
     if (detailsText && detailsText.length >= DISCORD_LIMITS.MIN_FIELD_BYTES) {
@@ -167,8 +236,12 @@ export class StateEngine extends EventEmitter {
       }
     }
 
-    if (event.buttons && Array.isArray(event.buttons)) {
-      const validButtons = event.buttons
+    const sourceButtons = (event.buttons && Array.isArray(event.buttons) && event.buttons.length > 0)
+      ? event.buttons
+      : cfg.customButtons;
+
+    if (sourceButtons && Array.isArray(sourceButtons) && sourceButtons.length > 0) {
+      const validButtons = sourceButtons
         .filter((btn) => btn && typeof btn.url === 'string' && /^https?:\/\//i.test(btn.url))
         .slice(0, DISCORD_LIMITS.MAX_BUTTONS)
         .map((btn) => ({
@@ -214,6 +287,17 @@ export class StateEngine extends EventEmitter {
   }
 
   _dispatchActivity(activity) {
+    const sig = JSON.stringify({
+      d: activity.details || '',
+      s: activity.state || '',
+      li: activity.assets?.large_image || '',
+      si: activity.assets?.small_image || '',
+      t: activity.timestamps?.start || 0,
+    });
+    if (sig === this.lastDispatchedKey && this.activeActivity) {
+      return { queued: false, sent: false, deduplicated: true, activity: this.activeActivity };
+    }
+    this.lastDispatchedKey = sig;
     this.lastSentTime = Date.now();
     this.activeActivity = activity;
     this.emit('activity', activity);
@@ -234,6 +318,7 @@ export class StateEngine extends EventEmitter {
     this._cancelTimer();
     this.pendingActivity = null;
     this.activeActivity = null;
+    this.lastDispatchedKey = null;
     this.currentState = COGNITIVE_STATES.IDLE;
   }
 

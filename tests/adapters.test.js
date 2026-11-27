@@ -10,6 +10,13 @@ import {
 } from '../adapters/claude-code/hook.js';
 import { generateClaudeHookConfig } from '../adapters/claude-code/config-helper.js';
 import { translateAntigravityEvent } from '../adapters/antigravity/hook.js';
+import {
+  translateHermesEvent,
+  parseHermesConfigModel,
+  generateHermesHookManifest,
+} from '../adapters/hermes/adapter.js';
+import { translateKimiCodeEvent } from '../adapters/kimi-code/adapter.js';
+import { translateDeepSeekEvent } from '../adapters/deepseek/adapter.js';
 import { COGNITIVE_STATES } from '../core/constants.js';
 
 export async function runAdaptersTests() {
@@ -39,11 +46,13 @@ export async function runAdaptersTests() {
 
   const promptSubmit = translateClaudeEvent(
     'UserPromptSubmit',
-    { prompt: 'Optimize the binary framing socket' },
+    { prompt: 'Optimize the binary framing socket', model: 'claude-opus-5-5', session_name: 'RPC Architecture' },
     'C:/Users/Ayzok/my-app'
   );
   assert.strictEqual(promptSubmit.state, COGNITIVE_STATES.THINKING);
-  assert.ok(promptSubmit.details.includes('Optimize the binary framing'));
+  assert.strictEqual(promptSubmit.model, 'Claude Opus 5.5', 'Must reflect real model name (Opus 5.5)');
+  assert.ok(!promptSubmit.details.includes('Optimize the binary framing'), 'Privacy: must NEVER expose user prompt text');
+  assert.strictEqual(promptSubmit.chatTitle, 'RPC Architecture');
 
   const toolUse = translateClaudeEvent(
     'PreToolUse',
@@ -115,6 +124,40 @@ export async function runAdaptersTests() {
   assert.strictEqual(agIdle.state, COGNITIVE_STATES.IDLE);
   assert.strictEqual(agIdle.forceImmediate, true);
   console.log('✓ Google Antigravity 2.0 event translation verified');
+
+  // Test 5: Hermes Agent (Nous Research) adapter, YAML parser & hook manifest
+  assert.strictEqual(parseHermesConfigModel('model: nous-hermes-4\n'), 'nous-hermes-4');
+  const hermesStart = translateHermesEvent('session:start', {
+    sessionId: 'h-01',
+    title: 'Investigación autónoma',
+    model: 'hermes-4',
+    prompt: 'SECRET PROMPT MUST NOT LEAK',
+  }, 'C:/Users/Ayzok/acourd-rpc');
+  assert.strictEqual(hermesStart.agentName, 'Hermes');
+  assert.strictEqual(hermesStart.model, 'Hermes 4');
+  assert.strictEqual(hermesStart.chatTitle, 'Investigación autónoma');
+  assert.ok(!hermesStart.details.includes('SECRET PROMPT'), 'Hermes must never leak prompt text');
+  assert.strictEqual(hermesStart.resetTimer, true);
+
+  const hermesEnd = translateHermesEvent('session:end', { sessionId: 'h-01' });
+  assert.strictEqual(hermesEnd.releaseLease, true);
+
+  const hermesManifest = generateHermesHookManifest();
+  assert.strictEqual(hermesManifest.name, 'acourd-rpc');
+  assert.ok(hermesManifest.events.includes('session:start'));
+  console.log('✓ Hermes Agent adapter, YAML parser & hook manifest verified');
+
+  // Test 6: Kimi Code & DeepSeek privacy-first adapters
+  const kimiEvt = translateKimiCodeEvent('start', { title: 'Refactor Core', model: 'kimi-k2', prompt: 'SECRET' }, 'C:/app');
+  assert.strictEqual(kimiEvt.agentName, 'Kimi Code');
+  assert.strictEqual(kimiEvt.model, 'Kimi K2');
+  assert.ok(!kimiEvt.details.includes('SECRET'));
+
+  const dsEvt = translateDeepSeekEvent('working', { title: 'Kernel Tuning', model: 'deepseek-r2', prompt: 'SECRET' }, 'C:/app');
+  assert.strictEqual(dsEvt.agentName, 'DeepSeek');
+  assert.strictEqual(dsEvt.model, 'DeepSeek R2');
+  assert.ok(!dsEvt.details.includes('SECRET'));
+  console.log('✓ Kimi Code & DeepSeek adapters verified');
 }
 
 if (process.argv[1] && process.argv[1].endsWith('adapters.test.js')) {

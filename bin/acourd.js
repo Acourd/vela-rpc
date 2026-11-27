@@ -7,6 +7,7 @@
 import { AcourdDaemon } from '../core/daemon.js';
 import { AcourdClient } from '../adapters/generic-client.js';
 import { COGNITIVE_STATES, STATE_METADATA } from '../core/constants.js';
+import { ConfigManager, PRESETS } from '../core/templates.js';
 
 function getCharWidth(codePoint) {
   if (!codePoint) return 0;
@@ -214,6 +215,76 @@ async function main() {
       break;
     }
 
+    case 'preset': {
+      const presetName = args[1];
+      if (!presetName || !PRESETS[presetName]) {
+        console.log('\nAvailable Acourd Presets:');
+        for (const p of Object.values(PRESETS)) {
+          console.log(`  • ${p.id.padEnd(10)} — ${p.description}`);
+          console.log(`                 Details: "${p.detailsTemplate}" | State: "${p.stateTemplate}"`);
+        }
+        console.log('\nUsage: acourd preset <linear|studio|stealth|hacker|custom>');
+        return;
+      }
+
+      try {
+        const res = await client._post('/config', { preset: presetName });
+        console.log(`✓ Preset switched to "${presetName}" (live on Discord).`);
+        if (res.activity) printCard(res.activity);
+      } catch (_) {
+        const cm = new ConfigManager();
+        cm.update({ preset: presetName });
+        console.log(`✓ Preset saved to "${presetName}" (~/.acourd/config.json).`);
+      }
+      break;
+    }
+
+    case 'config': {
+      const patch = {};
+      let hasChanges = false;
+      for (let i = 1; i < args.length; i += 1) {
+        if (args[i] === '--preset' && args[i + 1]) { patch.preset = args[i + 1]; hasChanges = true; i += 1; }
+        else if (args[i] === '--lang' && args[i + 1]) { patch.lang = args[i + 1]; hasChanges = true; i += 1; }
+        else if (args[i] === '--details' && args[i + 1]) { patch.detailsTemplate = args[i + 1]; hasChanges = true; i += 1; }
+        else if (args[i] === '--state' && args[i + 1]) { patch.stateTemplate = args[i + 1]; hasChanges = true; i += 1; }
+        else if (args[i] === '--emojis' && args[i + 1]) { patch.showEmojis = args[i + 1] !== 'off' && args[i + 1] !== 'false'; hasChanges = true; i += 1; }
+        else if (args[i] === '--elapsed' && args[i + 1]) { patch.showElapsed = args[i + 1] !== 'off' && args[i + 1] !== 'false'; hasChanges = true; i += 1; }
+        else if (args[i] === '--stealth' && args[i + 1]) { patch.stealthMode = args[i + 1] === 'on' || args[i + 1] === 'true'; hasChanges = true; i += 1; }
+        else if (args[i] === '--antigravity-id' && args[i + 1]) { patch.clientIds = { ...(patch.clientIds || {}), antigravity: args[i + 1] }; hasChanges = true; i += 1; }
+        else if (args[i] === '--claude-id' && args[i + 1]) { patch.clientIds = { ...(patch.clientIds || {}), claude: args[i + 1] }; hasChanges = true; i += 1; }
+        else if (args[i] === '--hermes-id' && args[i + 1]) { patch.clientIds = { ...(patch.clientIds || {}), hermes: args[i + 1] }; hasChanges = true; i += 1; }
+        else if (args[i] === '--icon-style' && args[i + 1]) { patch.iconStyle = args[i + 1]; hasChanges = true; i += 1; }
+        else if (args[i] === '--reset') { patch.reset = true; hasChanges = true; }
+      }
+
+      if (!hasChanges) {
+        const cm = new ConfigManager();
+        console.log('\nCurrent Acourd Configuration (~/.acourd/config.json):');
+        console.log(JSON.stringify(cm.getEffective(), null, 2));
+        console.log('\nVariables: {emoji} {task_or_state} {task} {state} {project} {branch} {agent} {tool}');
+        return;
+      }
+
+      try {
+        const res = await client._post('/config', patch);
+        console.log('✓ Configuration updated & synced live with Discord:');
+        console.log(JSON.stringify(res.config, null, 2));
+        if (res.activity) printCard(res.activity);
+      } catch (_) {
+        const cm = new ConfigManager();
+        const eff = cm.update(patch);
+        console.log('✓ Configuration saved to ~/.acourd/config.json:');
+        console.log(JSON.stringify(eff, null, 2));
+      }
+      break;
+    }
+
+    case 'hook': {
+      const { runClaudeHook } = await import('../adapters/claude-code/hook.js');
+      await runClaudeHook(args.slice(1));
+      break;
+    }
+
     default:
       console.log(`
 Acourd RPC — Zero-Bloat Universal Discord Rich Presence
@@ -224,10 +295,15 @@ Commands:
   start              Launch daemon silently in background
   stop               Stop running background daemon
   daemon             Run daemon in foreground
+  preset <name>      Switch visual copy preset (linear, studio, stealth, hacker, custom)
+  config [options]   View or customize dynamic presence templates
+                     Options: --lang <es|en> --details "<tpl>" --state "<tpl>"
+                              --emojis <on|off> --elapsed <on|off> --stealth <on|off> --reset
   preview            Render visual high-fidelity presence cards for all states
   set [options]      Manually dispatch an activity event
                      Options: --state <state> --details <text> --project <name>
   clear              Clear presence from Discord
+  hook [event]       Claude Code hook receiver
 `);
   }
 }

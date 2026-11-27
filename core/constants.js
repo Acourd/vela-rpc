@@ -21,7 +21,12 @@ export const RPC_EVENTS = Object.freeze({
   ERROR: 'ERROR',
 });
 
-export const DEFAULT_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1342526848259723385';
+export const KNOWN_CLIENT_IDS = Object.freeze({
+  ANTIGRAVITY: '1440730997460172810',
+  CLAUDE_CODE: '1472915568930848829',
+});
+
+export const DEFAULT_CLIENT_ID = process.env.DISCORD_CLIENT_ID || KNOWN_CLIENT_IDS.ANTIGRAVITY;
 
 export const DAEMON_CONFIG = Object.freeze({
   DEFAULT_PORT: 19452,

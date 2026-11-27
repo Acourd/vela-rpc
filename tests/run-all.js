@@ -7,6 +7,7 @@ import { runDiscordIpcTests } from './discord-ipc.test.js';
 import { runStateEngineTests } from './state-engine.test.js';
 import { runDaemonTests } from './daemon.test.js';
 import { runAdaptersTests } from './adapters.test.js';
+import { runTemplateTests } from './templates.test.js';
 import { runIntegrationTests } from './integration.test.js';
 
 async function main() {
@@ -23,6 +24,7 @@ async function main() {
     { name: 'State Engine, Rate Limiter & Privacy', fn: runStateEngineTests },
     { name: 'Micro-Daemon HTTP Server', fn: runDaemonTests },
     { name: 'Claude Code & Antigravity Adapters', fn: runAdaptersTests },
+    { name: 'Dynamic Templates, Presets & Live Config', fn: runTemplateTests },
     { name: 'End-to-End Mock Integration', fn: runIntegrationTests },
   ];
 

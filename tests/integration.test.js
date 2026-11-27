@@ -44,7 +44,7 @@ export async function runIntegrationTests() {
   // 3. Dispatch Claude Code UserPromptSubmit event
   const claudeEvent = translateClaudeEvent(
     'UserPromptSubmit',
-    { prompt: 'Implement zero-bloat binary framing microkernel' },
+    { prompt: 'Secret user prompt must not leak', model: 'claude-opus-5-5', session_name: 'AcourdCore Mission' },
     'C:/Projects/AcourdCore'
   );
   claudeEvent.forceImmediate = true;
@@ -56,7 +56,8 @@ export async function runIntegrationTests() {
   assert.strictEqual(mockServer.receivedActivities.length, 1);
   const act1 = mockServer.receivedActivities[0];
   assert.ok(act1.details.includes('🧠'));
-  assert.ok(act1.details.includes('Implement zero-bloat'));
+  assert.ok(!act1.details.includes('Secret user prompt'), 'Must never leak prompt text to Discord');
+  assert.ok(act1.details.includes('AcourdCore Mission'));
   assert.strictEqual(act1.state, 'AcourdCore • main');
   console.log('✓ Claude Code event traveled to Mock Discord: SET_ACTIVITY verified');
 
