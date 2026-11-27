@@ -1,12 +1,20 @@
-# Vela RPC
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/previews/banner_dark_es.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/previews/banner_light_es.png">
+  <img alt="Vela RPC — Discord Rich Presence para 13 arneses de IA" src="assets/previews/banner_dark_es.png" width="100%">
+</picture>
+
+<div align="center">
 
 [English](README.md) · **Español**
 
-Discord Rich Presence minimalista para arneses de programación con IA. Un solo daemon local en Node.js sin dependencias externas cubre 13 herramientas, detecta dinámicamente el modelo y el título real de la sesión, y filtra prompts y secretos antes de que salgan de tu equipo.
+Un daemon local ligero en Node.js puro para mostrar tu actividad de programación con IA en Discord a través de 13 arneses. Sin dependencias externas, detección dinámica del modelo activo y filtrado estricto para que ningún prompt ni secreto salga de tu equipo.
+
+</div>
 
 ## Vista previa en Discord
 
-La imagen superior cambia según tu tema de GitHub (Oficial Oscuro en modo oscuro, Porcelain Claro en modo claro). Debajo puedes ver también las tres variantes juntas sin importar qué tema tengas activo.
+La imagen principal se adapta al tema de GitHub que estés usando (Oficial Oscuro en modo oscuro, Porcelain Claro en modo claro).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/previews/discord_all13_classic_dark_es.png">
@@ -14,48 +22,57 @@ La imagen superior cambia según tu tema de GitHub (Oficial Oscuro en modo oscur
   <img alt="Vista previa de Vela RPC en Discord para 13 arneses de IA" src="assets/previews/discord_all13_classic_dark_es.png" width="100%">
 </picture>
 
-| Oficial Oscuro | Porcelain Claro |
-| :---: | :---: |
-| ![Vista previa Oficial Oscuro](assets/previews/discord_all13_classic_dark_es.png) | ![Vista previa Porcelain Claro](assets/previews/discord_all13_porcelain_light_es.png) |
+### Los tres estilos de iconos cara a cara
+
+Cada arnés incluye tres variantes PNG de 512×512 en `assets/styles/`:
+
+![Comparativa entre Oficial Oscuro, Porcelain Claro y Titanio OLED](assets/previews/discord_styles_trio_es.png)
 
 <details>
-<summary>Ver estilo Titanio OLED</summary>
+<summary>Ver catálogos completos de 13 arneses (Oficial Oscuro · Porcelain Claro · Titanio OLED)</summary>
 
-![Vista previa de Vela RPC en estilo Titanio OLED](assets/previews/discord_all13_titanium_oled_es.png)
+#### Oficial Oscuro (`classic`)
+![Vista completa Oficial Oscuro para 13 arneses](assets/previews/discord_all13_classic_dark_es.png)
+
+#### Porcelain Claro (`light`)
+![Vista completa Porcelain Claro para 13 arneses](assets/previews/discord_all13_porcelain_light_es.png)
+
+#### Titanio OLED (`titanium`)
+![Vista completa Titanio OLED para 13 arneses](assets/previews/discord_all13_titanium_oled_es.png)
 
 </details>
 
-## Instalación
+## Instalación rápida
 
-Requiere Node.js 18+ y Discord de escritorio en ejecución. No hace falta ejecutar `npm install`.
+Requiere Node.js 18+ y Discord de escritorio abierto en tu equipo. No hace falta ejecutar `npm install`.
 
 ```bash
 git clone https://github.com/Acourd/vela-rpc.git
 cd vela-rpc
-
-# Verificar la suite local (7/7 suites con servidor IPC simulado)
-node tests/run-all.js
-
-# Iniciar el daemon en segundo plano
-node bin/acourd.js start
-
-# Consultar estado activo
-node bin/acourd.js status
+node install.js
 ```
 
-## Selector de iconos (oscuro / claro / titanio)
+Al ejecutar `node install.js` en tu terminal, el instalador te deja elegir estilo de iconos (`Oficial Oscuro`, `Porcelain Claro` o `Titanio OLED`), detecta qué arneses tienes instalados, agrega los hooks sin pisar configuraciones previas y arranca el servicio en segundo plano.
 
-Cada arnés incluye tres variantes PNG de 512×512 en `assets/styles/`: `classic` (Oficial Oscuro), `light` (Porcelain Claro) y `titanium` (Titanio OLED). Cambia el estilo en caliente sin reiniciar el daemon:
+> **Si le pides a tu agente de IA que lo instale:** Cuando un usuario te pida instalar Vela RPC sin haber elegido tema todavía, pregúntale brevemente qué estilo de iconos prefiere (`Oficial Oscuro` / `classic`, `Porcelain Claro` / `light` o `Titanio OLED` / `titanium`) antes de ejecutar el modo desatendido:
+> ```bash
+> node install.js --yes --icon-style classic
+> ```
+
+Opciones y comandos útiles:
 
 ```bash
-node bin/acourd.js config --icon-style titanium   # Titanio OLED
-node bin/acourd.js config --icon-style classic    # Oficial Oscuro
-node bin/acourd.js config --icon-style light      # Porcelain Claro
+node install.js --yes --icon-style titanium   # Instalación directa con iconos Titanio OLED
+node install.js --dry-run                     # Ver qué detecta sin modificar archivos
+node bin/acourd.js status                     # Comprobar conexión con Discord y tarjeta activa
+node bin/acourd.js config --icon-style light  # Cambiar tema de iconos en caliente
+node install.js --uninstall                   # Retirar hooks de Vela sin tocar otros plugins
+node tests/run-all.js                         # Ejecutar las 7 suites locales de verificación
 ```
 
-### Arneses soportados
+## Arneses soportados
 
-Los iconos de esta tabla cambian automáticamente entre modo oscuro y claro en GitHub:
+Los iconos de esta tabla cambian automáticamente entre modo oscuro y claro. Los modelos mostrados son ejemplos actuales; en ejecución real Vela los lee de la sesión o configuración del arnés.
 
 | Icono | Arnés | Modelo de ejemplo | Icono | Arnés | Modelo de ejemplo |
 | :---: | :--- | :--- | :---: | :--- | :--- |
@@ -67,20 +84,22 @@ Los iconos de esta tabla cambian automáticamente entre modo oscuro y claro en G
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/openchamber_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/openchamber_porcelain_light.png"><img src="assets/styles/openchamber_classic_dark.png" width="28" alt="OpenChamber"></picture> | OpenChamber | Claude Opus 5.5 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/amp_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/amp_porcelain_light.png"><img src="assets/styles/amp_classic_dark.png" width="28" alt="Amp"></picture> | Amp | Claude Opus 5.5 |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/hermes_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/hermes_porcelain_light.png"><img src="assets/styles/hermes_classic_dark.png" width="28" alt="Hermes"></picture> | Hermes | Hermes 4.3 | | | |
 
-## Configuración de adaptadores
+## Configuración manual y detalles técnicos
 
 <details>
-<summary>Claude Code (<code>~/.claude/settings.json</code>)</summary>
+<summary>Hooks manuales para Claude Code (<code>~/.claude/settings.json</code>)</summary>
+
+`node install.js` inserta este bloque automáticamente si detecta `~/.claude`. Si prefieres editarlo a mano:
 
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "command": "node \"<path>/bin/acourd.js\" hook SessionStart" }],
-    "UserPromptSubmit": [{ "command": "node \"<path>/bin/acourd.js\" hook UserPromptSubmit" }],
-    "PreToolUse": [{ "command": "node \"<path>/bin/acourd.js\" hook PreToolUse" }],
-    "PostToolUse": [{ "command": "node \"<path>/bin/acourd.js\" hook PostToolUse" }],
-    "Stop": [{ "command": "node \"<path>/bin/acourd.js\" hook Stop" }],
-    "SessionEnd": [{ "command": "node \"<path>/bin/acourd.js\" hook SessionEnd" }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"<ruta>/adapters/claude-code/hook.js\" SessionStart", "timeout": 2 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"<ruta>/adapters/claude-code/hook.js\" UserPromptSubmit", "timeout": 2 }] }],
+    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "node \"<ruta>/adapters/claude-code/hook.js\" PreToolUse", "timeout": 2 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"<ruta>/adapters/claude-code/hook.js\" PostToolUse", "timeout": 2 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"<ruta>/adapters/claude-code/hook.js\" Stop", "timeout": 2 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"<ruta>/adapters/claude-code/hook.js\" SessionEnd", "timeout": 2 }] }]
   }
 }
 ```
@@ -88,33 +107,25 @@ Los iconos de esta tabla cambian automáticamente entre modo oscuro y claro en G
 </details>
 
 <details>
-<summary>Antigravity 2.0 y Antigravity IDE</summary>
+<summary>Antigravity 2.0, Antigravity IDE, Hermes, Codex y uso por CLI</summary>
+
+Cada arnés dispone de su adaptador en `adapters/<arnés>/adapter.js` y también puedes enviar eventos directos desde la línea de comandos:
 
 ```bash
 node adapters/antigravity/hook.js intent "Revisión de arquitectura"
 node adapters/antigravity/hook.js verify "7/7 suites en verde"
-```
-
-</details>
-
-<details>
-<summary>Hermes, Codex, OpenCode, OpenChamber, Kimi Code, DeepSeek y otros</summary>
-
-Cada arnés tiene su adaptador en `adapters/<arnés>/adapter.js` y también puedes enviar eventos directos desde la CLI:
-
-```bash
-node bin/acourd.js set --source codex --task "Refactor de API" --model "GPT-6.2 Sol"
+node bin/acourd.js set --details "Refactor de API" --project "vela-rpc"
 node bin/acourd.js clear
 ```
 
 </details>
 
 <details>
-<summary>Presets, Client IDs propios y detalles de arquitectura</summary>
+<summary>Presets, Client IDs propios y arquitectura interna</summary>
 
-- Presets disponibles: `autonomous` (título limpio + modelo activo), `telemetry`, `linear`, `studio`, `stealth`, `hacker` y `custom`. Se aplican con `node bin/acourd.js preset autonomous`.
-- Títulos personalizados en Discord: registra tus propios Client IDs y asígnalos con `--antigravity-id`, `--claude-id` o `--hermes-id` en `node bin/acourd.js config`.
-- Transporte: servidor HTTP local (`127.0.0.1:19452`) conectado por IPC binario nativo de 8 bytes LE a Discord (Named Pipes en Windows y Unix Domain Sockets en Linux/macOS, incluyendo Flatpak y Vesktop), límite de frecuencia de 15 s, lease de prioridad de 90 s entre sesiones, limpieza automática tras 5 min de inactividad y truncado UTF-8 seguro a 128 bytes.
+- Presets disponibles: `autonomous`, `linear`, `studio`, `stealth`, `hacker` y `custom` (`node bin/acourd.js preset autonomous`).
+- Títulos propios en Discord: registra tus propios Application IDs y aplícalos con `--antigravity-id`, `--claude-id` o `--hermes-id`.
+- Transporte y seguridad: servidor HTTP local (`127.0.0.1:19452`) conectado por IPC binario nativo de 8 bytes little-endian a Discord (Named Pipes en Windows y Unix Domain Sockets en Linux/macOS, incluyendo Flatpak y Vesktop), control de frecuencia cada 15 s, lease de prioridad de 90 s entre sesiones, limpieza tras 5 min de inactividad, redacción de secretos antes de renderizar plantillas y truncado UTF-8 seguro a 128 bytes.
 
 </details>
 

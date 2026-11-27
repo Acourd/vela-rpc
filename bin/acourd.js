@@ -285,20 +285,36 @@ async function main() {
       break;
     }
 
+    case 'setup':
+    case 'install': {
+      const { runSetupWizard } = await import('../core/installer.js');
+      await runSetupWizard(args.slice(1));
+      break;
+    }
+
+    case 'uninstall': {
+      const { runSetupWizard } = await import('../core/installer.js');
+      await runSetupWizard(['--uninstall', ...args.slice(1)]);
+      break;
+    }
+
     default:
       console.log(`
 Acourd RPC — Zero-Bloat Universal Discord Rich Presence
 Usage: acourd <command> [options]
 
 Commands:
+  setup [options]    Detect installed harnesses, configure hooks, choose icon pack & start daemon
+                     Options: --yes --icon-style <classic|light|titanium> --preset <id> --dry-run
+  uninstall          Remove Vela RPC hooks cleanly without touching other tools
   status             Show daemon health, IPC status, and active card preview
   start              Launch daemon silently in background
   stop               Stop running background daemon
   daemon             Run daemon in foreground
-  preset <name>      Switch visual copy preset (linear, studio, stealth, hacker, custom)
-  config [options]   View or customize dynamic presence templates
-                     Options: --lang <es|en> --details "<tpl>" --state "<tpl>"
-                              --emojis <on|off> --elapsed <on|off> --stealth <on|off> --reset
+  preset <name>      Switch visual copy preset (autonomous, linear, studio, stealth, hacker, custom)
+  config [options]   View or customize dynamic presence templates and icon packs
+                     Options: --icon-style <classic|light|titanium> --lang <es|en>
+                              --details "<tpl>" --state "<tpl>" --emojis <on|off> --elapsed <on|off> --reset
   preview            Render visual high-fidelity presence cards for all states
   set [options]      Manually dispatch an activity event
                      Options: --state <state> --details <text> --project <name>

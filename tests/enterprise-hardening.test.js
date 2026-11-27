@@ -23,6 +23,13 @@ import { readSelectedModel, formatModelName } from '../core/antigravity-telemetr
 import { readClaudeSessionModel } from '../adapters/claude-code/hook.js';
 import { AcourdDaemon } from '../core/daemon.js';
 import { AcourdClient } from '../adapters/generic-client.js';
+import {
+  detectInstalledHarnesses,
+  installClaudeHooks,
+  installHermesHook,
+  uninstallHooks,
+  runSetupWizard,
+} from '../core/installer.js';
 import { MockDiscordServer } from './mock-discord-ipc.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -463,6 +470,55 @@ export async function runEnterpriseHardeningTests() {
   const rawCount = checkPngDir(path.join(ROOT_DIR, 'assets'), false);
   const styleCount = checkPngDir(path.join(ROOT_DIR, 'assets', 'styles'), true);
   console.log(`✓ Binary PNG magic-byte integrity verified (${rawCount} raw + ${styleCount} 512x512 style PNGs)`);
+
+  // 6. Setup installer idempotency, hook preservation, fail-closed invalid JSON, and uninstall
+  const setupHome = fs.mkdtempSync(path.join(os.tmpdir(), 'vela-setup-'));
+  try {
+    fs.mkdirSync(path.join(setupHome, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(setupHome, '.hermes'), { recursive: true });
+    fs.mkdirSync(path.join(setupHome, '.codex'), { recursive: true });
+
+    const existingSettings = {
+      theme: 'dark',
+      hooks: {
+        PreToolUse: [{ hooks: [{ type: 'command', command: 'echo custom-user-hook' }] }],
+      },
+    };
+    fs.writeFileSync(path.join(setupHome, '.claude', 'settings.json'), JSON.stringify(existingSettings, null, 2), 'utf8');
+
+    const detected = detectInstalledHarnesses(setupHome);
+    assert.ok(detected.some((h) => h.id === 'claude-code'));
+    assert.ok(detected.some((h) => h.id === 'hermes'));
+    assert.ok(detected.some((h) => h.id === 'codex'));
+
+    // Run setup twice to verify idempotency and preservation of custom-user-hook
+    await runSetupWizard(['--yes', '--no-start', '--icon-style', 'titanium'], { homeDir: setupHome, allowPrompt: false });
+    await runSetupWizard(['--yes', '--no-start', '--icon-style', 'light'], { homeDir: setupHome, allowPrompt: false });
+
+    const claudeAfter = JSON.parse(fs.readFileSync(path.join(setupHome, '.claude', 'settings.json'), 'utf8'));
+    assert.strictEqual(claudeAfter.theme, 'dark');
+    assert.strictEqual(claudeAfter.hooks.PreToolUse.length, 2, 'Idempotent setup must preserve custom hook + exactly 1 Vela hook');
+    assert.strictEqual(claudeAfter.hooks.PreToolUse[0].hooks[0].command, 'echo custom-user-hook');
+    assert.ok(fs.existsSync(path.join(setupHome, '.hermes', 'hooks', 'vela-rpc', 'HOOK.yaml')));
+
+    const savedCfg = JSON.parse(fs.readFileSync(path.join(setupHome, '.acourd', 'config.json'), 'utf8'));
+    assert.strictEqual(savedCfg.iconStyle, 'light');
+
+    // Uninstall removes only Vela hooks cleanly
+    uninstallHooks(setupHome, false);
+    const claudeCleaned = JSON.parse(fs.readFileSync(path.join(setupHome, '.claude', 'settings.json'), 'utf8'));
+    assert.strictEqual(claudeCleaned.hooks.PreToolUse.length, 1, 'Uninstall must keep non-Vela hooks intact');
+    assert.ok(!fs.existsSync(path.join(setupHome, '.hermes', 'hooks', 'vela-rpc', 'HOOK.yaml')));
+
+    // Invalid JSON settings.json must fail-closed without clobbering
+    fs.writeFileSync(path.join(setupHome, '.claude', 'settings.json'), '{broken json', 'utf8');
+    const failClosed = installClaudeHooks(setupHome, false);
+    assert.strictEqual(failClosed.installed, false);
+    assert.strictEqual(fs.readFileSync(path.join(setupHome, '.claude', 'settings.json'), 'utf8'), '{broken json');
+  } finally {
+    fs.rmSync(setupHome, { recursive: true, force: true });
+  }
+  console.log('✓ Zero-friction setup installer, idempotent hook merge & fail-closed JSON verified');
 }
 
 if (process.argv[1] && process.argv[1].endsWith('enterprise-hardening.test.js')) {

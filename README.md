@@ -1,61 +1,78 @@
-# Vela RPC
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/previews/banner_dark_en.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/previews/banner_light_en.png">
+  <img alt="Vela RPC — Discord Rich Presence for 13 AI coding harnesses" src="assets/previews/banner_dark_en.png" width="100%">
+</picture>
+
+<div align="center">
 
 **English** · [Español](README.es.md)
 
-Minimalist Discord Rich Presence for AI coding harnesses. One local Node.js daemon with zero npm dependencies tracks 13 tools, reads the active model and session title dynamically, and strips prompts and secrets before anything leaves your machine.
+A lightweight local daemon in plain Node.js that broadcasts live Discord Rich Presence across 13 AI coding harnesses. No npm dependencies, dynamic model detection straight from your active session, and strict filtering so prompts and secrets stay on your machine.
+
+</div>
 
 ## Discord preview
 
-The header preview adapts to your GitHub theme (Official Dark in dark mode, Porcelain Light in light mode). All three icon packs are also shown below so you can inspect light, dark, and OLED variants regardless of your current theme.
+The preview below matches your GitHub theme automatically (Official Dark in dark mode, Porcelain Light in light mode).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/previews/discord_all13_classic_dark_en.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/previews/discord_all13_porcelain_light_en.png">
-  <img alt="Vela RPC Discord preview across 13 AI harnesses" src="assets/previews/discord_all13_classic_dark_en.png" width="100%">
+  <img alt="Vela RPC Discord Rich Presence across 13 AI harnesses" src="assets/previews/discord_all13_classic_dark_en.png" width="100%">
 </picture>
 
-| Official Dark | Porcelain Light |
-| :---: | :---: |
-| ![Vela RPC Official Dark preview](assets/previews/discord_all13_classic_dark_en.png) | ![Vela RPC Porcelain Light preview](assets/previews/discord_all13_porcelain_light_en.png) |
+### All three icon packs side by side
+
+Every harness ships with three 512×512 PNG variants in `assets/styles/`:
+
+![Comparison across Official Dark, Porcelain Light, and Titanium OLED](assets/previews/discord_styles_trio_en.png)
 
 <details>
-<summary>View Titanium OLED preview</summary>
+<summary>Open full 13-harness views (Official Dark · Porcelain Light · Titanium OLED)</summary>
 
-![Vela RPC Titanium OLED preview](assets/previews/discord_all13_titanium_oled_en.png)
+#### Official Dark (`classic`)
+![Official Dark preview across 13 harnesses](assets/previews/discord_all13_classic_dark_en.png)
+
+#### Porcelain Light (`light`)
+![Porcelain Light preview across 13 harnesses](assets/previews/discord_all13_porcelain_light_en.png)
+
+#### Titanium OLED (`titanium`)
+![Titanium OLED preview across 13 harnesses](assets/previews/discord_all13_titanium_oled_en.png)
 
 </details>
 
-## Installation
+## Quick setup
 
-Requires Node.js 18+ and a local Discord desktop client. No `npm install` needed.
+Requires Node.js 18+ and Discord desktop running locally. No `npm install` needed.
 
 ```bash
 git clone https://github.com/Acourd/vela-rpc.git
 cd vela-rpc
-
-# Verify the local test suite (7/7 suites, mock Discord IPC)
-node tests/run-all.js
-
-# Start the background daemon
-node bin/acourd.js start
-
-# Check active status
-node bin/acourd.js status
+node install.js
 ```
 
-## Icon theme switch (dark / light / titanium)
+Running `node install.js` in a terminal lets you pick an icon pack (`Official Dark`, `Porcelain Light`, or `Titanium OLED`), detects which AI harnesses you have installed, safely merges Vela hooks into existing configurations without overwriting your setup, and starts the background daemon.
 
-Every harness ships with three 512×512 PNG variants in `assets/styles/`: `classic` (Official Dark), `light` (Porcelain Light), and `titanium` (Titanium OLED). Switch the active style at runtime without restarting the daemon:
+> **Installing with an AI coding agent:** If the user asked you to set up Vela RPC and has not named a theme yet, briefly ask which icon style they want (`Official Dark` / `classic`, `Porcelain Light` / `light`, or `Titanium OLED` / `titanium`) before running the non-interactive command:
+> ```bash
+> node install.js --yes --icon-style classic
+> ```
+
+Useful flags and everyday commands:
 
 ```bash
-node bin/acourd.js config --icon-style titanium   # Titanium OLED
-node bin/acourd.js config --icon-style classic    # Official Dark
-node bin/acourd.js config --icon-style light      # Porcelain Light
+node install.js --yes --icon-style titanium   # Non-interactive install with Titanium OLED icons
+node install.js --dry-run                     # Preview detected harnesses without writing files
+node bin/acourd.js status                     # Check Discord IPC connection and active card
+node bin/acourd.js config --icon-style light  # Switch icon theme live without restarting
+node install.js --uninstall                   # Remove Vela hooks cleanly
+node tests/run-all.js                         # Run all 7 local test suites
 ```
 
-### Supported harnesses
+## Supported harnesses
 
-Icons in this table switch automatically between dark and light mode on GitHub:
+Icons in this table adapt to your GitHub theme. The example models reflect live detection defaults and read dynamically from active sessions or local config files when running.
 
 | Icon | Harness | Example model | Icon | Harness | Example model |
 | :---: | :--- | :--- | :---: | :--- | :--- |
@@ -67,20 +84,22 @@ Icons in this table switch automatically between dark and light mode on GitHub:
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/openchamber_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/openchamber_porcelain_light.png"><img src="assets/styles/openchamber_classic_dark.png" width="28" alt="OpenChamber"></picture> | OpenChamber | Claude Opus 5.5 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/amp_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/amp_porcelain_light.png"><img src="assets/styles/amp_classic_dark.png" width="28" alt="Amp"></picture> | Amp | Claude Opus 5.5 |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/styles/hermes_classic_dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/styles/hermes_porcelain_light.png"><img src="assets/styles/hermes_classic_dark.png" width="28" alt="Hermes"></picture> | Hermes | Hermes 4.3 | | | |
 
-## Adapter configuration
+## Manual adapter wiring and technical details
 
 <details>
-<summary>Claude Code (<code>~/.claude/settings.json</code>)</summary>
+<summary>Claude Code manual hook config (<code>~/.claude/settings.json</code>)</summary>
+
+`node install.js` writes this block safely on its own when `~/.claude` exists. If you prefer manual editing:
 
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "command": "node \"<path>/bin/acourd.js\" hook SessionStart" }],
-    "UserPromptSubmit": [{ "command": "node \"<path>/bin/acourd.js\" hook UserPromptSubmit" }],
-    "PreToolUse": [{ "command": "node \"<path>/bin/acourd.js\" hook PreToolUse" }],
-    "PostToolUse": [{ "command": "node \"<path>/bin/acourd.js\" hook PostToolUse" }],
-    "Stop": [{ "command": "node \"<path>/bin/acourd.js\" hook Stop" }],
-    "SessionEnd": [{ "command": "node \"<path>/bin/acourd.js\" hook SessionEnd" }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"<path>/adapters/claude-code/hook.js\" SessionStart", "timeout": 2 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"<path>/adapters/claude-code/hook.js\" UserPromptSubmit", "timeout": 2 }] }],
+    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "node \"<path>/adapters/claude-code/hook.js\" PreToolUse", "timeout": 2 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"<path>/adapters/claude-code/hook.js\" PostToolUse", "timeout": 2 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"<path>/adapters/claude-code/hook.js\" Stop", "timeout": 2 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"<path>/adapters/claude-code/hook.js\" SessionEnd", "timeout": 2 }] }]
   }
 }
 ```
@@ -88,33 +107,25 @@ Icons in this table switch automatically between dark and light mode on GitHub:
 </details>
 
 <details>
-<summary>Antigravity 2.0 and Antigravity IDE</summary>
+<summary>Antigravity 2.0, Antigravity IDE, Hermes, Codex and CLI usage</summary>
+
+Each harness ships an adapter under `adapters/<harness>/adapter.js` or can send events directly from the CLI:
 
 ```bash
 node adapters/antigravity/hook.js intent "Architecture review"
 node adapters/antigravity/hook.js verify "7/7 suites passing"
-```
-
-</details>
-
-<details>
-<summary>Hermes, Codex, OpenCode, OpenChamber, Kimi Code, DeepSeek and others</summary>
-
-Each harness exposes a standalone adapter under `adapters/<harness>/adapter.js` or can push events directly from the CLI:
-
-```bash
-node bin/acourd.js set --source codex --task "API refactor" --model "GPT-6.2 Sol"
+node bin/acourd.js set --details "API refactor" --project "vela-rpc"
 node bin/acourd.js clear
 ```
 
 </details>
 
 <details>
-<summary>Presets, custom Discord Client IDs and architecture notes</summary>
+<summary>Presets, custom Discord Client IDs and architecture</summary>
 
-- Available presets: `autonomous` (clean title + active model), `telemetry`, `linear`, `studio`, `stealth`, `hacker`, and `custom`. Apply one with `node bin/acourd.js preset autonomous`.
-- Custom Discord app titles: register your own Discord Application IDs and set them with `--antigravity-id`, `--claude-id`, or `--hermes-id` in `node bin/acourd.js config`.
-- Transport: local HTTP loopback (`127.0.0.1:19452`) into native 8-byte LE Discord IPC (Windows Named Pipes and Unix Domain Sockets, including Flatpak and Vesktop), 15s rate-limit debounce, 90s multi-session priority lease, 5-minute stale-presence cleanup, and 128-byte UTF-8 safe truncation.
+- Presets: `autonomous`, `linear`, `studio`, `stealth`, `hacker`, and `custom` (`node bin/acourd.js preset autonomous`).
+- Custom Discord app titles: register your own Discord Application IDs and set them with `--antigravity-id`, `--claude-id`, or `--hermes-id`.
+- Transport & safety: loopback HTTP server (`127.0.0.1:19452`) bridged to native 8-byte little-endian Discord IPC (Windows Named Pipes and Unix Domain Sockets, including Flatpak and Vesktop), 15s debounce, 90s multi-session priority lease, 5-minute stale cleanup, secret redaction before templating, and 128-byte UTF-8 boundary truncation.
 
 </details>
 
