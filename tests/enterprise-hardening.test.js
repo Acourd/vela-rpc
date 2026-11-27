@@ -103,6 +103,13 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!schemeTabAndMultiAt.includes('URL_CANARY'), 'URL scheme with tab before colon must be redacted');
   assert.ok(!schemeTabAndMultiAt.includes('PASSWORD_SUFFIX_CANARY'), 'URL password containing @ must be redacted up to last @');
   assert.ok(!schemeTabAndMultiAt.includes('P_SPACE'), 'URL userinfo with space must be redacted');
+  // Unicode host, underscore host, and signed JWS with empty payload
+  const unicodeAndEmptyJws = sanitizePrivacy(
+    `https://alice:UNICODE_HOST_CANARY@mañana.test/x https://alice:UNDERSCORE_HOST_CANARY@my_host.test/x ${jweHeader}..empty_payload_sig_999`
+  );
+  assert.ok(!unicodeAndEmptyJws.includes('UNICODE_HOST_CANARY'), 'Unicode host URL credential must be redacted');
+  assert.ok(!unicodeAndEmptyJws.includes('UNDERSCORE_HOST_CANARY'), 'Underscore host URL credential must be redacted');
+  assert.ok(!unicodeAndEmptyJws.includes('empty_payload_sig_999'), 'Signed JWS with empty payload must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');

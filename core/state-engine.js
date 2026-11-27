@@ -75,7 +75,7 @@ function redactTextPrimitives(input) {
     }
   );
   sanitized = sanitized.replace(
-    /((?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p(?:[\t\r\n]*s)?|w[\t\r\n]*s(?:[\t\r\n]*s)?)[\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/:\s][^/]*:[^/]*)@(?=(?:[A-Za-z0-9.:\[\]-]|[\t\r\n])+(?:[/?#\s]|$))/gi,
+    /((?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p(?:[\t\r\n]*s)?|w[\t\r\n]*s(?:[\t\r\n]*s)?)[\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/:\s][^/]*:[^/]*)@(?=(?:[^/?#\s@]|[\t\r\n])+(?:[/?#\s]|$))/gi,
     '$1[REDACTED]@'
   );
   return sanitized;
@@ -227,10 +227,10 @@ function redactStructuralJwts(text) {
     (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 
-  // 2. 3-segment JWS/JWT (including alg=none with empty trailing signature AND JWTs followed by sentence punctuation `.`)
+  // 2. 3-segment JWS/JWT (including alg=none with empty trailing signature AND signed JWS with empty payload)
   out = out.replace(
-    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
-    (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
+    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
+    (full, h, p, sig) => ((p.length > 0 || sig.length > 0) && isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 
   return out;
