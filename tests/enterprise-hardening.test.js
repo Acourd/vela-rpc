@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StateEngine, sanitizePrivacy, truncateUtf8 } from '../core/state-engine.js';
 import { resolveHarness, HARNESSES } from '../core/harnesses.js';
-import { detectDynamicModel } from '../core/model-detector.js';
+import { detectDynamicModel, extractModelFromTomlOrYaml } from '../core/model-detector.js';
 import { translateClaudeEvent } from '../adapters/claude-code/hook.js';
 import { translateCodexEvent } from '../adapters/codex/adapter.js';
 import { readHermesTelemetry } from '../adapters/hermes/adapter.js';
@@ -263,6 +263,21 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
+    // Apostrophe inside plain scalar (`don't`) must not desync quotes, and auto-detect must not treat TOML inside YAML string as TOML
+    fs.writeFileSync(
+      path.join(tmpHome, '.hermes', 'config.yaml'),
+      'notes: don\'t\nprompt: "a\'\nmodel: YAML_QUOTE_CANARY\n"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
+    assert.strictEqual(
+      extractModelFromTomlOrYaml('notes: |\n  model = "TOML_IN_YAML_AUTO_CANARY"\n'),
+      null
+    );
+    assert.strictEqual(
+      extractModelFromTomlOrYaml('notes: "hello\nmodel = TOML_IN_YAML_STR_CANARY\n"\n'),
+      null
+    );
     fs.writeFileSync(
       path.join(tmpHome, '.hermes', 'config.yaml'),
       'inactive:\n  model: wrong-nested-only\n',

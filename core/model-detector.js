@@ -543,7 +543,8 @@ function preprocessYaml(raw) {
       i += 1;
       continue;
     }
-    if (ch === '"') {
+    const isTokenStart = atLineStart || i === 0 || ' \t:,[{-'.includes(raw[i - 1]);
+    if (ch === '"' && isTokenStart) {
       atLineStart = false;
       state = 'DOUBLE';
       quoteBuf = '';
@@ -551,7 +552,7 @@ function preprocessYaml(raw) {
       i += 1;
       continue;
     }
-    if (ch === "'") {
+    if (ch === "'" && isTokenStart) {
       atLineStart = false;
       state = 'SINGLE';
       quoteBuf = '';
@@ -559,7 +560,7 @@ function preprocessYaml(raw) {
       i += 1;
       continue;
     }
-    if (ch === '{' || ch === '[') {
+    if ((ch === '{' || ch === '[') && isTokenStart) {
       atLineStart = false;
       flowDepth += 1;
       i += 1;
@@ -602,10 +603,20 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format =
   if (!raw || typeof raw !== 'string') return null;
 
   let effectiveFormat = format;
+  let preCleanedYaml = null;
   if (effectiveFormat === 'auto') {
-    const looksToml = /^[ \t]*\[/m.test(raw) || /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*=/m.test(raw);
-    const looksYaml = /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*:(?:\s|$)/m.test(raw);
-    if (looksYaml && !looksToml) effectiveFormat = 'yaml';
+    const firstNonEmpty = raw.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || '';
+    if (parseTomlSectionHeader(firstNonEmpty) !== null || /^["']?[A-Za-z0-9_.-]+["']?\s*=/.test(firstNonEmpty)) {
+      effectiveFormat = 'toml';
+    } else if (firstNonEmpty === '---' || /^["']?[A-Za-z0-9_.-]+["']?\s*:(?:\s|$)/.test(firstNonEmpty)) {
+      preCleanedYaml = preprocessYaml(raw);
+      const hasTopToml = /^[ \t]*\[/m.test(preCleanedYaml) || /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*=/m.test(preCleanedYaml);
+      effectiveFormat = hasTopToml ? 'auto' : 'yaml';
+    } else {
+      const looksToml = /^[ \t]*\[/m.test(raw) || /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*=/m.test(raw);
+      const looksYaml = /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*:(?:\s|$)/m.test(raw);
+      if (looksYaml && !looksToml) effectiveFormat = 'yaml';
+    }
   }
 
   const ROOT_KEY = '[]';
@@ -614,7 +625,9 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format =
   let isTomlSection = effectiveFormat === 'toml';
   const yamlStack = [];
 
-  const cleaned = effectiveFormat === 'yaml' ? preprocessYaml(raw) : stripTomlMultilineAndComments(raw);
+  const cleaned = effectiveFormat === 'yaml'
+    ? (preCleanedYaml ?? preprocessYaml(raw))
+    : stripTomlMultilineAndComments(raw);
   const lines = cleaned.split(/\r?\n/);
   for (const rawLine of lines) {
     const indent = rawLine.match(/^[ \t]*/)[0].replace(/\t/g, '  ').length;
