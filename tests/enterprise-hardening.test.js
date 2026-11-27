@@ -283,6 +283,14 @@ export async function runEnterpriseHardeningTests() {
       null
     );
     assert.strictEqual(
+      extractModelFromTomlOrYaml('notes:\n  - plain\n    \'still plain\nprompt: "a\'\nmodel: YAML_SEQUENCE_CANARY\n"\n', null, 'yaml'),
+      null
+    );
+    assert.strictEqual(
+      extractModelFromTomlOrYaml('notes:\n  - |\n    model: YAML_SEQ_BLOCK_CANARY\n', null, 'yaml'),
+      null
+    );
+    assert.strictEqual(
       extractModelFromTomlOrYaml('notes: |\n  model = "TOML_IN_YAML_AUTO_CANARY"\n'),
       null
     );
