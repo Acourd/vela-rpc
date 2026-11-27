@@ -44,10 +44,11 @@ export async function readHermesTelemetry(options = {}) {
     }
   } catch (_) {}
 
+  const detectedFallbackModel = configModel || process.env.HERMES_MODEL || null;
   const fallback = {
     sessionId: null,
     chatTitle: null,
-    model: formatModelName(configModel || process.env.HERMES_MODEL || harness.defaultModel),
+    model: detectedFallbackModel ? formatModelName(detectedFallbackModel) : null,
     state: COGNITIVE_STATES.IDLE,
     isWorking: false,
   };
@@ -83,10 +84,11 @@ export async function readHermesTelemetry(options = {}) {
       : Date.parse(String(row.ts || ''));
     const isWorking = !Number.isNaN(tsMs) && (Date.now() - tsMs) < 90_000;
 
+    const resolvedDbModel = row.model || configModel || process.env.HERMES_MODEL || null;
     return {
       sessionId: row.id ? String(row.id) : null,
       chatTitle: (row.title || '').trim() || null,
-      model: formatModelName(row.model || configModel || process.env.HERMES_MODEL || harness.defaultModel),
+      model: resolvedDbModel ? formatModelName(resolvedDbModel) : null,
       state: isWorking ? COGNITIVE_STATES.THINKING : COGNITIVE_STATES.IDLE,
       isWorking,
     };

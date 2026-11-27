@@ -58,13 +58,16 @@ export function sanitizePrivacy(text, options = {}) {
   sanitized = sanitized.replace(/\.env(?:\.[\w.-]+)?/gi, '[REDACTED_ENV]');
   sanitized = sanitized.replace(/(?:id_rsa|id_ed25519|id_ecdsa|\.pem|\.key)\b/gi, '[REDACTED_KEY]');
 
-  // 3. API keys, JWTs, Bearer tokens, URL credentials, and secret key-value assignments
+  // 3. API keys, JWTs, Bearer tokens, URL credentials, and secret key-value / JSON assignments
   sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, 'Bearer [REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd)\s*[:=]\s*["']?[^\s"'`]{4,}["']?/gi, '$1=[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/(https?:\/\/)[^/\s:@]+:[^/\s:@]+@/gi, '$1[REDACTED]@');
+  sanitized = sanitized.replace(
+    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*["']?([^\s"'`,}\]]{3,})["']?/gi,
+    '$1=[REDACTED_TOKEN]'
+  );
+  sanitized = sanitized.replace(/(https?:\/\/)[^/\s]+@/gi, '$1[REDACTED]@');
 
   // 4. Project stealth mode
   if (options.stealthMode) {
@@ -93,6 +96,8 @@ export class StateEngine extends EventEmitter {
     this.activeActivity = null;
     this.lastDispatchedKey = null;
     this.lastEvent = {};
+    this.currentHarnessKey = null;
+    this.currentSessionKey = null;
     this.currentContext = {
       project: 'Workspace',
       branch: 'main',
@@ -130,13 +135,32 @@ export class StateEngine extends EventEmitter {
     this.currentState = normalizedState;
     this.lastEvent = { ...event };
 
+    const incomingHarnessKey = String(event.harness || event.source || event.agentName || '').toLowerCase() || null;
+    const incomingSessionKey = event.sessionId || event.session_id || null;
+    const switchedHarness = Boolean(
+      incomingHarnessKey && this.currentHarnessKey && incomingHarnessKey !== this.currentHarnessKey
+    );
+    const switchedSession = Boolean(
+      incomingSessionKey && this.currentSessionKey && incomingSessionKey !== this.currentSessionKey
+    );
+
+    if (switchedHarness || switchedSession) {
+      // Never bleed previous harness/session model or chat title into a new harness/session
+      this.currentContext.model = null;
+      this.currentContext.chatTitle = null;
+      this.currentContext.task = null;
+      this.currentContext.tool = null;
+    }
+    if (incomingHarnessKey) this.currentHarnessKey = incomingHarnessKey;
+    if (incomingSessionKey) this.currentSessionKey = incomingSessionKey;
+
     if (event.project !== undefined) this.currentContext.project = event.project;
     if (event.branch !== undefined) this.currentContext.branch = event.branch;
     if (event.tool !== undefined) this.currentContext.tool = event.tool;
     if (event.details !== undefined) this.currentContext.details = event.details;
     if (event.task !== undefined) this.currentContext.task = event.task;
     if (event.chatTitle !== undefined) this.currentContext.chatTitle = event.chatTitle;
-    if (event.model !== undefined) this.currentContext.model = event.model;
+    if (event.model !== undefined) this.currentContext.model = event.model || null;
     if (event.stepCount !== undefined) this.currentContext.stepCount = event.stepCount;
     if (event.agentName) this.agentName = event.agentName;
     if (event.resetTimer) this.sessionStartTime = Math.floor(Date.now() / 1000);
@@ -246,7 +270,18 @@ export class StateEngine extends EventEmitter {
 
     if (sourceButtons && Array.isArray(sourceButtons) && sourceButtons.length > 0) {
       const validButtons = sourceButtons
-        .filter((btn) => btn && typeof btn.url === 'string' && /^https?:\/\//i.test(btn.url) && !/^https?:\/\/[^/\s:@]+:[^/\s:@]+@/i.test(btn.url))
+        .filter((btn) => {
+          if (!btn || typeof btn.url !== 'string') return false;
+          try {
+            const parsed = new URL(btn.url);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+            if (parsed.username || parsed.password) return false;
+            if (/@/.test(parsed.host)) return false;
+            return true;
+          } catch (_) {
+            return false;
+          }
+        })
         .slice(0, DISCORD_LIMITS.MAX_BUTTONS)
         .map((btn) => ({
           label: truncateUtf8(sanitizePrivacy(btn.label || 'Link', { stealthMode: effectiveStealth }), DISCORD_LIMITS.MAX_BUTTON_LABEL_BYTES),

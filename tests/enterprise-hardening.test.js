@@ -16,6 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { StateEngine, sanitizePrivacy, truncateUtf8 } from '../core/state-engine.js';
 import { resolveHarness, HARNESSES } from '../core/harnesses.js';
 import { detectDynamicModel } from '../core/model-detector.js';
+import { translateClaudeEvent } from '../adapters/claude-code/hook.js';
+import { translateCodexEvent } from '../adapters/codex/adapter.js';
+import { readHermesTelemetry } from '../adapters/hermes/adapter.js';
 import { AcourdDaemon } from '../core/daemon.js';
 import { AcourdClient } from '../adapters/generic-client.js';
 import { MockDiscordServer } from './mock-discord-ipc.js';
@@ -39,8 +42,14 @@ export async function runEnterpriseHardeningTests() {
     buttons: [
       { label: `Open ${fakeBearer}`, url: 'https://github.com/Acourd/vela-rpc' },
       { label: 'Leaked Creds URL', url: 'https://user:pass@example.com/secret' },
+      { label: 'Multi-Colon Creds URL', url: 'https://user:pass:extra@host.tld/x' },
     ],
   });
+
+  // Quoted JSON secrets must also be redacted
+  const jsonSanitized = sanitizePrivacy('Payload {"api_key": "top_secret_json_999", "token":"abc_secret_777"}');
+  assert.ok(!jsonSanitized.includes('top_secret_json_999'), 'Quoted JSON api_key must be redacted');
+  assert.ok(!jsonSanitized.includes('abc_secret_777'), 'Quoted JSON token must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -62,28 +71,55 @@ export async function runEnterpriseHardeningTests() {
   assert.strictEqual(Object.keys(HARNESSES).length, 14);
   console.log('✓ Null-safe resolveHarness() & 14-harness registry verified');
 
-  // 3. Dynamic model detection (live config files, zero static fabrication)
+  // 3. Dynamic model detection (session-correlated JSONL, profile-aware TOML, zero static fabrication)
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'vela-model-test-'));
   try {
-    fs.mkdirSync(path.join(tmpHome, '.codex'), { recursive: true });
-    fs.writeFileSync(path.join(tmpHome, '.codex', 'config.toml'), 'model = "gpt-5.4-codex"\n', 'utf8');
+    fs.mkdirSync(path.join(tmpHome, '.codex', 'sessions'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'config.toml'),
+      'profile = "work"\n\n[profiles.legacy]\nmodel = "old-legacy-model"\n\n[profiles.work]\nmodel = "gpt-5.4-codex"\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'sessions', 'sess-a.jsonl'),
+      '{"session_id":"sess-a","model":"gpt-5"}\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'sessions', 'sess-b.jsonl'),
+      '{"session_id":"sess-b","model":"o4-mini"}\n',
+      'utf8'
+    );
 
     fs.mkdirSync(path.join(tmpHome, '.config', 'opencode'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, '.config', 'opencode', 'opencode.json'), JSON.stringify({ model: 'claude-sonnet-4-6' }), 'utf8');
 
     fs.mkdirSync(path.join(tmpHome, '.vibe'), { recursive: true });
-    fs.writeFileSync(path.join(tmpHome, '.vibe', 'config.toml'), 'active_model = "devstral-2"\n', 'utf8');
+    fs.writeFileSync(path.join(tmpHome, '.vibe', 'config.toml'), '[profiles.inactive]\nactive_model = "wrong-model"\n', 'utf8');
 
-    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
+    // Session-correlated JSONL: sess-a gets GPT 5; unknown session falls back to active profile [profiles.work] (never sess-b or [profiles.legacy])
+    assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-a' }, { homeDir: tmpHome, env: {} }), 'GPT 5');
+    assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-unknown' }, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
     assert.strictEqual(detectDynamicModel('opencode', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
-    assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), 'Devstral 2');
+    // Inactive TOML profile MUST NOT be selected
+    assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);
     // Zero static fabrication when unconfigured:
     assert.strictEqual(detectDynamicModel('deepseek', {}, { homeDir: tmpHome, env: {} }), null);
     assert.strictEqual(detectDynamicModel('kimi-code', {}, { homeDir: tmpHome, env: {} }), null);
+    // Hermes readHermesTelemetry returns null model when unconfigured (no static 'Hermes 4')
+    const hermesEmpty = await readHermesTelemetry({ hermesDir: path.join(tmpHome, '.hermes-empty') });
+    assert.strictEqual(hermesEmpty.model, null, 'readHermesTelemetry must not fabricate Hermes 4');
+    // Adapter preserves sessionId
+    assert.strictEqual(translateCodexEvent('working', { session_id: 'cx-1' }).sessionId, 'cx-1');
+    // Switching harness in StateEngine clears stale previous model
+    const switchEngine = new StateEngine({ debounceMs: 10, config: { preset: 'autonomous' } });
+    switchEngine.processEvent({ harness: 'claude-code', state: 'thinking', chatTitle: 'T1', model: 'Claude Opus 5.5', forceImmediate: true });
+    const sw = switchEngine.processEvent({ harness: 'deepseek', state: 'thinking', chatTitle: 'T2', forceImmediate: true });
+    assert.ok(!JSON.stringify(sw.activity).includes('Claude Opus 5.5'), 'Previous harness model must not bleed into new harness');
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
-  console.log('✓ Dynamic model detection (TOML/JSON) & zero static fabrication verified');
+  console.log('✓ Dynamic model detection (session-correlated JSONL, profile-aware TOML, no cross-harness bleed) verified');
 
   // 4. Session-keyed multi-session arbitration (idle never displaces active; close promotes or clears)
   const mockServer = new MockDiscordServer();
@@ -100,44 +136,37 @@ export async function runEnterpriseHardeningTests() {
   }
   const client = new AcourdClient({ port: 19459 });
 
-  // Session 1 active
-  await client.sendEvent({
-    source: 'claude',
-    sessionId: 's1',
-    state: 'thinking',
-    chatTitle: 'Active Mission S1',
-    model: 'Claude Opus 5.5',
-    forceImmediate: true,
-  }, false);
+  // Session 1 active via real translateClaudeEvent (with session_id)
+  const claudeS1 = translateClaudeEvent('UserPromptSubmit', {
+    session_id: 's1',
+    session_name: 'Active Mission S1',
+    model: 'claude-opus-5-5',
+  }, ROOT_DIR);
+  await client.sendEvent(claudeS1, false);
 
-  // Session 2 idle MUST NOT displace Session 1
-  const idleRes = await client.sendEvent({
-    source: 'antigravity',
-    sessionId: 's2',
-    state: 'idle',
-    chatTitle: 'Idle Background S2',
-    forceImmediate: true,
-  }, false);
-  assert.strictEqual(idleRes.deferred, true, 'Idle session must not displace active session');
+  // Session 2 idle via real translateClaudeEvent MUST NOT displace Session 1
+  const claudeS2Idle = translateClaudeEvent('Stop', {
+    session_id: 's2',
+    session_name: 'Idle Background S2',
+    model: 'claude-sonnet-4-6',
+  }, ROOT_DIR);
+  const idleRes = await client.sendEvent(claudeS2Idle, false);
+  assert.strictEqual(idleRes.deferred, true, 'Idle Claude session s2 must not displace active Claude session s1');
 
-  // Closing non-owner session s2 MUST NOT clear Session 1
-  const closeS2 = await client.sendEvent({
-    source: 'antigravity',
-    sessionId: 's2',
-    state: 'idle',
-    releaseLease: true,
-    forceImmediate: true,
-  }, false);
+  // Closing non-owner session s2 via SessionEnd MUST NOT clear Session 1
+  const claudeS2End = translateClaudeEvent('SessionEnd', {
+    session_id: 's2',
+    session_name: 'Idle Background S2',
+  }, ROOT_DIR);
+  const closeS2 = await client.sendEvent(claudeS2End, false);
   assert.strictEqual(closeS2.keptActiveSession, 'claude-code:s1');
 
-  // Closing last active session s1 MUST clear Discord presence (null)
-  const closeS1 = await client.sendEvent({
-    source: 'claude',
-    sessionId: 's1',
-    state: 'idle',
-    releaseLease: true,
-    forceImmediate: true,
-  }, false);
+  // Closing last active session s1 via SessionEnd MUST clear Discord presence (null)
+  const claudeS1End = translateClaudeEvent('SessionEnd', {
+    session_id: 's1',
+    session_name: 'Active Mission S1',
+  }, ROOT_DIR);
+  const closeS1 = await client.sendEvent(claudeS1End, false);
   assert.strictEqual(closeS1.cleared, true);
   await new Promise((r) => setTimeout(r, 80));
   assert.strictEqual(mockServer.receivedActivities[mockServer.receivedActivities.length - 1], null);

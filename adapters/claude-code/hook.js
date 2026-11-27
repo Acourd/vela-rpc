@@ -138,6 +138,7 @@ export function translateClaudeEvent(hookName, payload = {}, cwd = process.cwd()
     || 'Claude';
   const model = formatModelName(detectedModel);
 
+  const sessionId = payload.sessionId || payload.session_id || undefined;
   const sessionTitle = payload.session_name
     || (payload.session_id ? readClaudeSessionName(payload.session_id) : null)
     || undefined;
@@ -147,6 +148,7 @@ export function translateClaudeEvent(hookName, payload = {}, cwd = process.cwd()
   const base = {
     source: 'claude',
     harness: 'claude-code',
+    ...(sessionId ? { sessionId } : {}),
     project: projectName,
     ...(branch ? { branch } : {}),
     ...(sessionTitle ? { chatTitle: sessionTitle } : {}),
