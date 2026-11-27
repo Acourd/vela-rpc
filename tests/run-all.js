@@ -9,6 +9,7 @@ import { runDaemonTests } from './daemon.test.js';
 import { runAdaptersTests } from './adapters.test.js';
 import { runTemplateTests } from './templates.test.js';
 import { runIntegrationTests } from './integration.test.js';
+import { runEnterpriseHardeningTests } from './enterprise-hardening.test.js';
 
 async function main() {
   console.log('========================================================');
@@ -26,6 +27,7 @@ async function main() {
     { name: 'Claude Code & Antigravity Adapters', fn: runAdaptersTests },
     { name: 'Dynamic Templates, Presets & Live Config', fn: runTemplateTests },
     { name: 'End-to-End Mock Integration', fn: runIntegrationTests },
+    { name: 'Enterprise Hardening, Privacy & Dynamic Model Detection', fn: runEnterpriseHardeningTests },
   ];
 
   for (const suite of suites) {

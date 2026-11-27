@@ -10,6 +10,7 @@ import path from 'node:path';
 import { COGNITIVE_STATES } from '../../core/constants.js';
 import { HARNESS_IDS, HARNESSES } from '../../core/harnesses.js';
 import { formatModelName, detectGitBranch } from '../../core/antigravity-telemetry.js';
+import { detectDynamicModel } from '../../core/model-detector.js';
 
 const HERMES_DIR = path.join(os.homedir(), '.hermes');
 
@@ -102,14 +103,14 @@ export async function readHermesTelemetry(options = {}) {
  * Translates Hermes lifecycle events (`session:start`, `pre_tool_call`, `post_tool_call`, `session:end`)
  * into minimalist, privacy-first Acourd Rich Presence payloads. Never exposes prompt text.
  */
-export function translateHermesEvent(eventType, payload = {}, cwd = process.cwd()) {
+export function translateHermesEvent(eventType, payload = {}, cwd = process.cwd(), options = {}) {
+  const safePayload = (payload && typeof payload === 'object') ? payload : {};
   const harness = HARNESSES[HARNESS_IDS.HERMES];
-  const effectiveCwd = payload.cwd || cwd || process.cwd();
-  const project = payload.project || path.basename(effectiveCwd) || 'Workspace';
-  const branch = payload.branch || detectGitBranch(effectiveCwd) || undefined;
-  const rawModel = payload.model || process.env.HERMES_MODEL || harness.defaultModel;
-  const model = formatModelName(rawModel);
-  const type = String(eventType || payload.event || payload.status || 'working').toLowerCase();
+  const effectiveCwd = safePayload.cwd || cwd || process.cwd();
+  const project = safePayload.project || path.basename(effectiveCwd) || 'Workspace';
+  const branch = safePayload.branch || detectGitBranch(effectiveCwd) || undefined;
+  const model = detectDynamicModel(harness.id, safePayload, options) || undefined;
+  const type = String(eventType || safePayload.event || safePayload.status || 'working').toLowerCase();
 
   let state = COGNITIVE_STATES.THINKING;
   if (type === 'idle' || type === 'session:end' || type === 'end' || type === 'stop') {

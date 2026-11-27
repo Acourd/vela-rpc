@@ -8,12 +8,14 @@ import path from 'node:path';
 import { COGNITIVE_STATES } from '../../core/constants.js';
 import { HARNESS_IDS, HARNESSES } from '../../core/harnesses.js';
 import { formatModelName } from '../../core/antigravity-telemetry.js';
+import { detectDynamicModel } from '../../core/model-detector.js';
 
-export function translateCodexEvent(eventType, payload = {}, cwd = process.cwd()) {
+export function translateCodexEvent(eventType, payload = {}, cwd = process.cwd(), options = {}) {
+  const safePayload = (payload && typeof payload === 'object') ? payload : {};
   const harness = HARNESSES[HARNESS_IDS.CODEX];
-  const project = payload.project || path.basename(payload.cwd || cwd) || 'Workspace';
-  const model = formatModelName(payload.model || process.env.CODEX_MODEL || harness.defaultModel);
-  const type = String(eventType || payload.type || 'working').toLowerCase();
+  const project = safePayload.project || path.basename(safePayload.cwd || cwd) || 'Workspace';
+  const model = detectDynamicModel(harness.id, safePayload, options) || undefined;
+  const type = String(eventType || safePayload.type || 'working').toLowerCase();
 
   let state = COGNITIVE_STATES.THINKING;
   if (type === 'idle' || type === 'stop' || type === 'end') state = COGNITIVE_STATES.IDLE;

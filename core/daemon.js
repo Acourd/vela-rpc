@@ -16,6 +16,7 @@ import { DiscordIPC } from './discord-ipc.js';
 import { StateEngine } from './state-engine.js';
 import { ConfigManager, PRESETS } from './templates.js';
 import { resolveHarness } from './harnesses.js';
+import { detectDynamicModel } from './model-detector.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -276,36 +277,94 @@ export class AcourdDaemon extends EventEmitter {
           return;
         }
 
-        const source = payload.source || (
-          String(payload.agentName || '').toLowerCase().includes('claude') ? 'claude' : 'antigravity'
-        );
+        const harness = resolveHarness(payload);
+        const source = payload.source || harness.id || 'antigravity';
+        const canonicalSource = harness.id || source;
         const now = Date.now();
         this.lastActivityEventAt = now;
 
-        const sessionKey = payload.sessionId ? `${source}:${payload.sessionId}` : source;
+        const sessionKey = payload.sessionId ? `${canonicalSource}:${payload.sessionId}` : canonicalSource;
+        const normalizedEventState = String(payload.state || payload.cognitiveState || 'idle').toLowerCase();
+        const isIdleEvent = normalizedEventState === 'idle';
+
+        // Enrich with real dynamic model detection if payload omitted model
+        const dynamicModel = payload.model || detectDynamicModel(harness.id, payload);
+        const enrichedPayload = dynamicModel ? { ...payload, model: dynamicModel } : payload;
+
+        // Rule 1: Session release / teardown with deterministic failover or clean clear
         if (payload.releaseLease) {
           this.sessions.delete(sessionKey);
-          const hasSiblingSession = [...this.sessions.values()].some((s) => s.source === source);
-          if (!hasSiblingSession && this.activeLease && this.activeLease.source === source) {
-            this.activeLease = null;
-          }
-        } else {
-          this.sessions.set(sessionKey, { source, lastSeenAt: now });
-        }
+          const wasActiveOwner = Boolean(this.activeLease && this.activeLease.sessionKey === sessionKey);
 
-        // Prevent idle background heartbeats from hijacking an actively working sibling agent
-        const isIdleHeartbeat = Boolean(payload.isHeartbeat) && (!payload.state || payload.state === 'idle');
-        if (isIdleHeartbeat && this.activeLease && this.activeLease.source !== source && now < this.activeLease.expiresAt) {
+          if (!wasActiveOwner && this.activeLease && now < this.activeLease.expiresAt && this.sessions.has(this.activeLease.sessionKey)) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, released: true, keptActiveSession: this.activeLease.sessionKey }));
+            return;
+          }
+
+          // Promote most recent live remaining session (preferring active non-idle over idle)
+          const remaining = [...this.sessions.values()].sort((a, b) => {
+            if (a.active !== b.active) return a.active ? -1 : 1;
+            return b.lastSeenAt - a.lastSeenAt;
+          });
+
+          if (remaining.length > 0) {
+            const winner = remaining[0];
+            this.activeLease = winner.active
+              ? { sessionKey: winner.sessionKey, source: winner.source, expiresAt: now + 90_000 }
+              : null;
+            const failoverResult = this.stateEngine.processEvent({ ...winner.payload, forceImmediate: true });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, released: true, promotedSession: winner.sessionKey, ...failoverResult }));
+            return;
+          }
+
+          // No live sessions remain: clear active presence cleanly (zero ghost/wrong activity)
+          this.activeLease = null;
+          if (this.ipc && this.ipc.ready) {
+            try { this.ipc.clearActivity(); } catch (_) {}
+          }
+          if (this.stateEngine) {
+            this.stateEngine.clear();
+          }
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, deferred: true, activeSource: this.activeLease.source }));
+          res.end(JSON.stringify({ ok: true, released: true, cleared: true }));
           return;
         }
 
-        if (!payload.releaseLease && (source === 'claude' || (payload.state && payload.state !== 'idle'))) {
-          this.activeLease = { source, expiresAt: now + 90_000 };
+        // Track live session state
+        this.sessions.set(sessionKey, {
+          sessionKey,
+          source,
+          active: !isIdleEvent,
+          payload: enrichedPayload,
+          lastSeenAt: now,
+        });
+
+        // Rule 2: Never let an idle session displace another live active session holding a valid lease
+        if (
+          isIdleEvent &&
+          this.activeLease &&
+          this.activeLease.sessionKey !== sessionKey &&
+          now < this.activeLease.expiresAt &&
+          this.sessions.has(this.activeLease.sessionKey)
+        ) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            ok: true,
+            deferred: true,
+            activeSource: this.activeLease.source,
+            activeSessionKey: this.activeLease.sessionKey,
+          }));
+          return;
         }
 
-        const harness = resolveHarness(payload);
+        if (!isIdleEvent) {
+          this.activeLease = { sessionKey, source, expiresAt: now + 90_000 };
+        } else if (this.activeLease && this.activeLease.sessionKey === sessionKey) {
+          this.activeLease = null;
+        }
+
         const configuredIds = this.configManager?.getEffective()?.clientIds || {};
         const targetClientId = payload.clientId
           || configuredIds[harness.id]
@@ -316,7 +375,7 @@ export class AcourdDaemon extends EventEmitter {
 
         // Process event first so stateEngine.activeActivity is ready when the new IPC handshake finishes
         const result = this.stateEngine.processEvent(
-          needsClientSwitch ? { ...payload, forceImmediate: true } : payload
+          needsClientSwitch ? { ...enrichedPayload, forceImmediate: true } : enrichedPayload
         );
 
         if (needsClientSwitch) {

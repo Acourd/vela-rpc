@@ -154,7 +154,8 @@ export const HARNESSES = Object.freeze({
  * Resolves a harness definition from an event payload (`source`, `harness`, or `agentName`).
  */
 export function resolveHarness(payload = {}) {
-  const raw = String(payload.harness || payload.source || payload.agentName || '').toLowerCase();
+  const safe = (payload && typeof payload === 'object') ? payload : {};
+  const raw = String(safe.harness || safe.source || safe.agentName || '').toLowerCase();
 
   if (raw.includes('openchamber')) return HARNESSES[HARNESS_IDS.OPENCHAMBER];
   if (raw.includes('opencode')) return HARNESSES[HARNESS_IDS.OPENCODE];

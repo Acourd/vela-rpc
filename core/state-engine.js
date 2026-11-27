@@ -58,9 +58,13 @@ export function sanitizePrivacy(text, options = {}) {
   sanitized = sanitized.replace(/\.env(?:\.[\w.-]+)?/gi, '[REDACTED_ENV]');
   sanitized = sanitized.replace(/(?:id_rsa|id_ed25519|id_ecdsa|\.pem|\.key)\b/gi, '[REDACTED_KEY]');
 
-  // 3. API keys and Bearer tokens (GitHub tokens, OpenAI, Anthropic, generic Bearer)
-  sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})/g, '[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,})/g, '[REDACTED_TOKEN]');
+  // 3. API keys, JWTs, Bearer tokens, URL credentials, and secret key-value assignments
+  sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, 'Bearer [REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd)\s*[:=]\s*["']?[^\s"'`]{4,}["']?/gi, '$1=[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/(https?:\/\/)[^/\s:@]+:[^/\s:@]+@/gi, '$1[REDACTED]@');
 
   // 4. Project stealth mode
   if (options.stealthMode) {
@@ -155,7 +159,7 @@ export class StateEngine extends EventEmitter {
     const branch = effectiveStealth ? '' : (this.currentContext.branch || '');
     const shortAgent = this.agentName.replace(/^Google\s+/i, '').replace(/\s+2\.0$/i, '').trim() || 'AI';
     const chatTitle = effectiveStealth ? '' : (event.chatTitle || this.currentContext.chatTitle || '');
-    const model = event.model || this.currentContext.model || (shortAgent.toLowerCase().includes('claude') ? 'Claude' : 'Gemini AI');
+    const model = event.model !== undefined ? (event.model || '') : (this.currentContext.model || '');
     const conciseStatus = this.currentState === COGNITIVE_STATES.IDLE
       ? (cfg.lang === 'es' ? 'Idle' : 'Idle')
       : (cfg.lang === 'es' ? 'Working' : 'Working');
@@ -199,10 +203,10 @@ export class StateEngine extends EventEmitter {
     }
     const largeImageKey = event.largeImage || defaultLargeImage;
     const rawLargeText = event.largeText || `${this.agentName} • ${localized.label}`;
-    const largeText = truncateUtf8(rawLargeText);
+    const largeText = truncateUtf8(sanitizePrivacy(rawLargeText, { stealthMode: effectiveStealth }));
     const smallImageKey = meta.icon || 'idle';
     const rawSmallText = localized.description || meta.description || localized.label;
-    const smallText = truncateUtf8(rawSmallText);
+    const smallText = truncateUtf8(sanitizePrivacy(rawSmallText, { stealthMode: effectiveStealth }));
 
     const activity = {
       assets: {},
@@ -242,10 +246,10 @@ export class StateEngine extends EventEmitter {
 
     if (sourceButtons && Array.isArray(sourceButtons) && sourceButtons.length > 0) {
       const validButtons = sourceButtons
-        .filter((btn) => btn && typeof btn.url === 'string' && /^https?:\/\//i.test(btn.url))
+        .filter((btn) => btn && typeof btn.url === 'string' && /^https?:\/\//i.test(btn.url) && !/^https?:\/\/[^/\s:@]+:[^/\s:@]+@/i.test(btn.url))
         .slice(0, DISCORD_LIMITS.MAX_BUTTONS)
         .map((btn) => ({
-          label: truncateUtf8(btn.label || 'Link', DISCORD_LIMITS.MAX_BUTTON_LABEL_BYTES),
+          label: truncateUtf8(sanitizePrivacy(btn.label || 'Link', { stealthMode: effectiveStealth }), DISCORD_LIMITS.MAX_BUTTON_LABEL_BYTES),
           url: btn.url,
         }));
 
