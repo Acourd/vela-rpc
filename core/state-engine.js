@@ -146,12 +146,12 @@ function redactEmbeddedJson(text, depth = 0) {
           continue;
         } catch (_) {}
       } else {
-        // Check for excessive unclosed mixed `{` and `[` nesting depth (fail-closed)
+        // Check for excessive unclosed mixed `{` and `[` nesting depth across full bounded payload (fail-closed)
         let peak = 0;
         let cur = 0;
         let s = false;
         let esc = false;
-        for (let j = i; j < Math.min(text.length, i + 8192); j += 1) {
+        for (let j = i; j < text.length; j += 1) {
           const ch = text[j];
           if (esc) { esc = false; continue; }
           if (ch === '\\' && s) { esc = true; continue; }
@@ -336,15 +336,17 @@ export class StateEngine extends EventEmitter {
     if (incomingHarnessKey) this.currentHarnessKey = incomingHarnessKey;
     this.currentSessionKey = incomingSessionKey;
 
-    if (event.project !== undefined) this.currentContext.project = event.project;
-    if (event.branch !== undefined) this.currentContext.branch = event.branch;
-    if (event.tool !== undefined) this.currentContext.tool = event.tool;
-    if (event.details !== undefined) this.currentContext.details = event.details;
-    if (event.task !== undefined) this.currentContext.task = event.task;
-    if (event.chatTitle !== undefined) this.currentContext.chatTitle = event.chatTitle;
-    if (event.model !== undefined) this.currentContext.model = event.model || null;
-    if (event.stepCount !== undefined) this.currentContext.stepCount = event.stepCount;
-    if (event.agentName) this.agentName = event.agentName;
+    if (event.project !== undefined) this.currentContext.project = event.project != null ? String(event.project) : 'Workspace';
+    if (event.branch !== undefined) this.currentContext.branch = event.branch != null ? String(event.branch) : '';
+    if (event.tool !== undefined) this.currentContext.tool = event.tool != null ? String(event.tool) : null;
+    if (event.details !== undefined) this.currentContext.details = event.details != null ? String(event.details) : null;
+    if (event.task !== undefined) this.currentContext.task = event.task != null ? String(event.task) : null;
+    if (event.chatTitle !== undefined) this.currentContext.chatTitle = event.chatTitle != null ? String(event.chatTitle) : null;
+    if (event.model !== undefined) this.currentContext.model = event.model != null ? String(event.model) : null;
+    if (event.stepCount !== undefined) this.currentContext.stepCount = Number(event.stepCount) || 0;
+    if (event.agentName !== undefined && event.agentName !== null && String(event.agentName).trim() !== '') {
+      this.agentName = String(event.agentName);
+    }
     if (event.resetTimer) this.sessionStartTime = Math.floor(Date.now() / 1000);
 
     const activity = this.buildActivityPayload(event);
@@ -361,17 +363,22 @@ export class StateEngine extends EventEmitter {
     const meta = STATE_METADATA[this.currentState] || STATE_METADATA[COGNITIVE_STATES.IDLE];
 
     const effectiveStealth = Boolean(this.stealthMode || cfg.stealthMode);
-    const project = effectiveStealth ? 'Private Workspace' : (this.currentContext.project || 'Workspace');
-    const branch = effectiveStealth ? '' : (this.currentContext.branch || '');
-    const shortAgent = this.agentName.replace(/^Google\s+/i, '').replace(/\s+2\.0$/i, '').trim() || 'AI';
-    const chatTitle = effectiveStealth ? '' : (event.chatTitle || this.currentContext.chatTitle || '');
-    const model = event.model !== undefined ? (event.model || '') : (this.currentContext.model || '');
+    const project = effectiveStealth ? 'Private Workspace' : String(this.currentContext.project || 'Workspace');
+    const branch = effectiveStealth ? '' : String(this.currentContext.branch || '');
+    const safeAgentName = String(this.agentName || 'AI Agent');
+    const shortAgent = safeAgentName.replace(/^Google\s+/i, '').replace(/\s+2\.0$/i, '').trim() || 'AI';
+    const chatTitle = effectiveStealth ? '' : String(event.chatTitle ?? this.currentContext.chatTitle ?? '');
+    const model = event.model !== undefined
+      ? (event.model != null ? String(event.model) : '')
+      : String(this.currentContext.model || '');
     const conciseStatus = this.currentState === COGNITIVE_STATES.IDLE
       ? (cfg.lang === 'es' ? 'Idle' : 'Idle')
       : (cfg.lang === 'es' ? 'Working' : 'Working');
     const steps = this.currentContext.stepCount > 0 ? `${this.currentContext.stepCount} steps` : '';
 
-    let rawTask = event.task || event.details || '';
+    let rawTask = event.task != null
+      ? String(event.task)
+      : (event.details != null ? String(event.details) : '');
     if (!rawTask && this.currentState === COGNITIVE_STATES.TOOL_CALL && this.currentContext.tool) {
       rawTask = cfg.lang === 'es'
         ? `Ejecutando ${this.currentContext.tool}`
@@ -396,7 +403,7 @@ export class StateEngine extends EventEmitter {
 
     let detailsText = renderTemplate(cfg.detailsTemplate, templateVars);
     let stateText = event.stateText !== undefined
-      ? event.stateText
+      ? (event.stateText != null ? String(event.stateText) : '')
       : renderTemplate(cfg.stateTemplate, templateVars);
 
     // Apply privacy sanitization and 128-byte truncation
@@ -404,11 +411,11 @@ export class StateEngine extends EventEmitter {
     stateText = truncateUtf8(sanitizePrivacy(stateText, { stealthMode: effectiveStealth }));
 
     let defaultLargeImage = 'antigravity_logo';
-    if (this.agentName && this.agentName.toLowerCase().includes('claude')) {
+    if (safeAgentName.toLowerCase().includes('claude')) {
       defaultLargeImage = 'claude-code';
     }
-    const largeImageKey = event.largeImage || defaultLargeImage;
-    const rawLargeText = event.largeText || `${this.agentName} • ${localized.label}`;
+    const largeImageKey = event.largeImage != null ? String(event.largeImage) : defaultLargeImage;
+    const rawLargeText = event.largeText != null ? String(event.largeText) : `${safeAgentName} • ${localized.label}`;
     const largeText = truncateUtf8(sanitizePrivacy(rawLargeText, { stealthMode: effectiveStealth }));
     const smallImageKey = meta.icon || 'idle';
     const rawSmallText = localized.description || meta.description || localized.label;

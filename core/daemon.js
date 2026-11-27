@@ -255,21 +255,29 @@ export class AcourdDaemon extends EventEmitter {
 
     if (req.method === 'POST' && pathname === '/config') {
       this._parseJsonBody(req, res, (patch) => {
-        const effective = this.configManager.update(patch);
-        const dispatchRes = this.stateEngine.setConfig(effective, true);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          ok: true,
-          config: effective,
-          activity: this.stateEngine.activeActivity,
-          dispatched: Boolean(dispatchRes && dispatchRes.sent),
-        }));
+        try {
+          const effective = this.configManager.update(patch);
+          const dispatchRes = this.stateEngine.setConfig(effective, true);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            ok: true,
+            config: effective,
+            activity: this.stateEngine.activeActivity,
+            dispatched: Boolean(dispatchRes && dispatchRes.sent),
+          }));
+        } catch (err) {
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid configuration payload' }));
+          }
+        }
       });
       return;
     }
 
     if (req.method === 'POST' && (pathname === '/event' || pathname === '/activity')) {
       this._parseJsonBody(req, res, async (payload) => {
+        try {
         // Drop legacy pre-restart sidecar frames ("Active in Antigravity 2.0" / project "rpc")
         if (payload.details === 'Active in Antigravity 2.0' && payload.project === 'rpc') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -415,8 +423,14 @@ export class AcourdDaemon extends EventEmitter {
           this._connectIpc().catch(() => {});
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, ...result }));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...result }));
+        } catch (err) {
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid event payload' }));
+          }
+        }
       });
       return;
     }

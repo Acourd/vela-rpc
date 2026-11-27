@@ -95,9 +95,9 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!crlfUrlSanitized.includes('URL_CANARY'), 'HTTPS URL credential with LF must be redacted');
   assert.ok(!crlfUrlSanitized.includes('P_CANARY'), 'HTTPS URL credential with LF in scheme and CR in password must be redacted');
 
-  // Mixed unclosed container depth >= 12, tab before colon in URL scheme, and multiple `@` in password
-  const mixedDepthSanitized = sanitizePrivacy('[{"x":'.repeat(6) + '"MIXED_DEPTH_CANARY"');
-  assert.ok(!mixedDepthSanitized.includes('MIXED_DEPTH_CANARY'), 'Mixed unclosed container depth >= 12 must fail-closed');
+  // Mixed unclosed container depth >= 12 even with 8,500-char padding
+  const mixedDepthSanitized = sanitizePrivacy('[{"x":'.repeat(6) + ' '.repeat(8500) + '"MIXED_DEPTH_CANARY"');
+  assert.ok(!mixedDepthSanitized.includes('MIXED_DEPTH_CANARY'), 'Mixed unclosed container depth >= 12 with >8KB padding must fail-closed');
 
   const schemeTabAndMultiAt = sanitizePrivacy('https\t://alice:URL_CANARY@host.test/x https://alice:PREFIX@PASSWORD_SUFFIX_CANARY@host.test/x https://u s:P_SPACE@host.test/x');
   assert.ok(!schemeTabAndMultiAt.includes('URL_CANARY'), 'URL scheme with tab before colon must be redacted');
@@ -297,6 +297,16 @@ export async function runEnterpriseHardeningTests() {
   assert.strictEqual(relB.cleared, true, 'Releasing B after /clear must clear Discord instead of resurrecting A');
   await new Promise((r) => setTimeout(r, 80));
   assert.strictEqual(mockServer.receivedActivities[mockServer.receivedActivities.length - 1], null);
+
+  // Non-string scalar fields like `{"agentName":17}` MUST NOT crash daemon or poison /status
+  const numAgentRes = await fetch('http://127.0.0.1:19459/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentName: 17, state: 'thinking', forceImmediate: true }),
+  });
+  assert.strictEqual(numAgentRes.status, 200, 'Numeric agentName must coerce cleanly instead of crashing daemon');
+  const statusAfterRes = await fetch('http://127.0.0.1:19459/status');
+  assert.strictEqual(statusAfterRes.status, 200, 'Daemon /status must stay responsive after numeric fields');
 
   await daemon.stop();
   await mockServer.close();
