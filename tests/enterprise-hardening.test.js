@@ -95,6 +95,15 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!crlfUrlSanitized.includes('URL_CANARY'), 'HTTPS URL credential with LF must be redacted');
   assert.ok(!crlfUrlSanitized.includes('P_CANARY'), 'HTTPS URL credential with LF in scheme and CR in password must be redacted');
 
+  // Mixed unclosed container depth >= 12, tab before colon in URL scheme, and multiple `@` in password
+  const mixedDepthSanitized = sanitizePrivacy('[{"x":'.repeat(6) + '"MIXED_DEPTH_CANARY"');
+  assert.ok(!mixedDepthSanitized.includes('MIXED_DEPTH_CANARY'), 'Mixed unclosed container depth >= 12 must fail-closed');
+
+  const schemeTabAndMultiAt = sanitizePrivacy('https\t://alice:URL_CANARY@host.test/x https://alice:PREFIX@PASSWORD_SUFFIX_CANARY@host.test/x https://u s:P_SPACE@host.test/x');
+  assert.ok(!schemeTabAndMultiAt.includes('URL_CANARY'), 'URL scheme with tab before colon must be redacted');
+  assert.ok(!schemeTabAndMultiAt.includes('PASSWORD_SUFFIX_CANARY'), 'URL password containing @ must be redacted up to last @');
+  assert.ok(!schemeTabAndMultiAt.includes('P_SPACE'), 'URL userinfo with space must be redacted');
+
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
   assert.ok(!serialized.includes('SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'), 'JWT must never reach Discord');
@@ -169,6 +178,14 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5');
+
+    // TOML array-of-tables [[profiles.inactive]] MUST NOT fall back to root when no profile is active
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'config.toml'),
+      '[[profiles.inactive]]\nmodel="CANARY_INACTIVE_TABLE"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), null);
     // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
     assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
     // Claude broken JSONL / foreign session must return null

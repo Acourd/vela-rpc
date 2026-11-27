@@ -191,6 +191,7 @@ function stripTomlMultilineAndComments(raw) {
   let state = 'NORMAL'; // NORMAL | SINGLE | DOUBLE | MULTI_SINGLE | MULTI_DOUBLE | COMMENT
   let braceDepth = 0; // tracks [...] on RHS and {...} inline tables
   let atLineStart = true;
+  let inSectionHeader = false;
 
   while (i < raw.length) {
     const ch = raw[i];
@@ -200,6 +201,7 @@ function stripTomlMultilineAndComments(raw) {
       if (ch === '\n' || ch === '\r') {
         state = 'NORMAL';
         atLineStart = true;
+        inSectionHeader = false;
         out += ch;
       }
       i += 1;
@@ -249,6 +251,7 @@ function stripTomlMultilineAndComments(raw) {
       if (ch === '\n' || ch === '\r') {
         state = 'NORMAL';
         atLineStart = true;
+        inSectionHeader = false;
         out += ch;
         i += 1;
         continue;
@@ -268,6 +271,7 @@ function stripTomlMultilineAndComments(raw) {
       if (ch === '\n' || ch === '\r') {
         state = 'NORMAL';
         atLineStart = true;
+        inSectionHeader = false;
         out += ch;
         i += 1;
         continue;
@@ -283,12 +287,12 @@ function stripTomlMultilineAndComments(raw) {
       i += 1;
       continue;
     }
-    if (next3 === '"""') {
+    if (!inSectionHeader && next3 === '"""') {
       state = 'MULTI_DOUBLE';
       i += 3;
       continue;
     }
-    if (next3 === "'''") {
+    if (!inSectionHeader && next3 === "'''") {
       state = 'MULTI_SINGLE';
       i += 3;
       continue;
@@ -309,6 +313,7 @@ function stripTomlMultilineAndComments(raw) {
     }
     if (ch === '\n' || ch === '\r') {
       atLineStart = true;
+      inSectionHeader = false;
       if (braceDepth === 0) out += ch;
       i += 1;
       continue;
@@ -318,22 +323,29 @@ function stripTomlMultilineAndComments(raw) {
       i += 1;
       continue;
     }
-    if (ch === '[' && (!atLineStart || braceDepth > 0)) {
+    if (braceDepth === 0 && atLineStart && ch === '[') {
+      inSectionHeader = true;
+      atLineStart = false;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (!inSectionHeader && ch === '[' && (!atLineStart || braceDepth > 0)) {
       braceDepth += 1;
       i += 1;
       continue;
     }
-    if (ch === ']' && braceDepth > 0) {
+    if (!inSectionHeader && ch === ']' && braceDepth > 0) {
       braceDepth -= 1;
       i += 1;
       continue;
     }
-    if (ch === '{') {
+    if (!inSectionHeader && ch === '{') {
       braceDepth += 1;
       i += 1;
       continue;
     }
-    if (ch === '}' && braceDepth > 0) {
+    if (!inSectionHeader && ch === '}' && braceDepth > 0) {
       braceDepth -= 1;
       i += 1;
       continue;

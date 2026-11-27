@@ -74,7 +74,10 @@ function redactTextPrimitives(input) {
       return full;
     }
   );
-  sanitized = sanitized.replace(/((?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p(?:[\t\r\n]*s)?):\/\/)[^/@]+@/gi, '$1[REDACTED]@');
+  sanitized = sanitized.replace(
+    /((?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p(?:[\t\r\n]*s)?|w[\t\r\n]*s(?:[\t\r\n]*s)?)[\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/:\s][^/]*:[^/]*)@(?=(?:[A-Za-z0-9.:\[\]-]|[\t\r\n])+(?:[/?#\s]|$))/gi,
+    '$1[REDACTED]@'
+  );
   return sanitized;
 }
 
@@ -143,21 +146,25 @@ function redactEmbeddedJson(text, depth = 0) {
           continue;
         } catch (_) {}
       } else {
-        // Check for excessive unclosed nesting depth (fail-closed)
+        // Check for excessive unclosed mixed `{` and `[` nesting depth (fail-closed)
         let peak = 0;
         let cur = 0;
         let s = false;
         let esc = false;
-        for (let j = i; j < Math.min(text.length, i + 4096); j += 1) {
+        for (let j = i; j < Math.min(text.length, i + 8192); j += 1) {
           const ch = text[j];
           if (esc) { esc = false; continue; }
           if (ch === '\\' && s) { esc = true; continue; }
           if (ch === '"') { s = !s; continue; }
-          if (!s && ch === openCh) {
-            cur += 1;
-            if (cur > peak) peak = cur;
-            if (depth + peak >= MAX_JSON_REDACT_DEPTH) {
-              return `${out}[REDACTED_TOKEN]`;
+          if (!s) {
+            if (ch === '{' || ch === '[') {
+              cur += 1;
+              if (cur > peak) peak = cur;
+              if (depth + peak >= MAX_JSON_REDACT_DEPTH) {
+                return `${out}[REDACTED_TOKEN]`;
+              }
+            } else if ((ch === '}' || ch === ']') && cur > 0) {
+              cur -= 1;
             }
           }
         }
