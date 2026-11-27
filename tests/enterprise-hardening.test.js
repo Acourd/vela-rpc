@@ -69,11 +69,20 @@ export async function runEnterpriseHardeningTests() {
   const jweToken = `${jweHeader}..iv123456.ciphertext_canary.tag123456`;
   const signedJwtWithPeriod = `eyJhbGciOiJIUzI1NiJ9.e30.sig_period_999.`;
   const doubleSerializedJson = JSON.stringify({ outer: JSON.stringify({ password: 'nested_canary_777' }) });
-  const joseSanitized = sanitizePrivacy(`Tokens: ${noneJwt} and ${jweToken} and ${signedJwtWithPeriod} ${doubleSerializedJson}`);
+  const rootDoubleSerialized = JSON.stringify(JSON.stringify({ password: 'ROOT_DOUBLE_CANARY_55' }));
+  const deepNestedJson = JSON.stringify({ a: JSON.stringify({ b: JSON.stringify({ c: JSON.stringify({ password: 'DEEP_NESTED_CANARY_88' }) }) }) });
+  const joseSanitized = sanitizePrivacy(`Tokens: ${noneJwt} and ${jweToken} and ${signedJwtWithPeriod} ${doubleSerializedJson} ${rootDoubleSerialized} ${deepNestedJson}`);
   assert.ok(!joseSanitized.includes('canary_none') && !joseSanitized.includes(noneJwt), 'Unsigned alg=none JWT must be redacted');
   assert.ok(!joseSanitized.includes('ciphertext_canary') && !joseSanitized.includes(jweToken), '5-segment JWE must be redacted');
   assert.ok(!joseSanitized.includes('sig_period_999'), 'JWT followed by sentence period must be redacted');
   assert.ok(!joseSanitized.includes('nested_canary_777'), 'Double-serialized JSON password must be redacted');
+  assert.ok(!joseSanitized.includes('ROOT_DOUBLE_CANARY_55'), 'Root double-serialized JSON string must be redacted');
+  let extremeDepth = JSON.stringify({ password: 'EXTREME_DEPTH_CANARY_15' });
+  for (let d = 0; d < 14; d += 1) {
+    extremeDepth = JSON.stringify({ wrap: extremeDepth });
+  }
+  const extremeSanitized = sanitizePrivacy(extremeDepth);
+  assert.ok(!extremeSanitized.includes('EXTREME_DEPTH_CANARY_15'), 'Exceeding recursion depth must fail-closed and redact');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -134,6 +143,13 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);
+    // Escaped TOML profile value `profile = "a\u002eb"` selects `[profiles."a\u002eb"]`
+    fs.writeFileSync(
+      path.join(tmpHome, '.vibe', 'config.toml'),
+      'profile = "a\\u002eb"\n[profiles."a\\u002eb"]\nactive_model = "devstral-2"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), 'Devstral 2');
     // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
     assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
     // Claude broken JSONL / foreign session must return null

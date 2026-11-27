@@ -97,6 +97,29 @@ function decodeTomlBasicEscape(str, backslashIdx) {
   return { ch: next || '', advance: 2 };
 }
 
+function decodeTomlValueString(rawVal) {
+  const trimmed = rawVal.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+    const inner = trimmed.slice(1, -1);
+    let out = '';
+    for (let i = 0; i < inner.length; ) {
+      if (inner[i] === '\\') {
+        const dec = decodeTomlBasicEscape(inner, i);
+        out += dec.ch;
+        i += dec.advance;
+      } else {
+        out += inner[i];
+        i += 1;
+      }
+    }
+    return out;
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 function parseTomlSectionSegments(rawSection) {
   const segments = [];
   let cur = '';
@@ -345,10 +368,10 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
       continue;
     }
 
-    const kvMatch = line.match(/^["']?([A-Za-z0-9_.-]+)["']?\s*[:=]\s*["']?([A-Za-z0-9_./:-]+)["']?\s*$/);
+    const kvMatch = line.match(/^["']?([A-Za-z0-9_.-]+)["']?\s*[:=]\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*$/);
     if (kvMatch) {
       const key = kvMatch[1].trim();
-      const val = kvMatch[2].trim();
+      const val = decodeTomlValueString(kvMatch[2]);
       if (!sections[currentSection]) sections[currentSection] = {};
       sections[currentSection][key] = val;
     }
@@ -362,9 +385,11 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
     return null;
   };
 
-  const activeProfile = explicitProfile || sections[ROOT_KEY].profile || sections[ROOT_KEY].active_profile || null;
-  if (activeProfile) {
-    const normProfile = String(activeProfile).trim().replace(/^["'](.*)["']$/, '$1');
+  const rawProfile = explicitProfile ?? sections[ROOT_KEY].profile ?? sections[ROOT_KEY].active_profile ?? null;
+  if (rawProfile !== null && rawProfile !== undefined && String(rawProfile).trim() !== '') {
+    const normProfile = explicitProfile
+      ? String(explicitProfile).trim().replace(/^["'](.*)["']$/, '$1')
+      : String(rawProfile);
     const profModel =
       pickModel(sections[JSON.stringify(['profiles', normProfile])]) ||
       pickModel(sections[JSON.stringify(['profile', normProfile])]) ||

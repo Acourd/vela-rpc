@@ -46,11 +46,44 @@ function decodeUnicodeEscapes(str) {
   return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+const MAX_JSON_REDACT_DEPTH = 12;
+
+function redactTextPrimitives(input) {
+  let sanitized = input;
+  // 1. Obfuscate absolute home paths on Windows/Unix
+  sanitized = sanitized.replace(
+    /(?:[a-zA-Z]:[/\\]+Users[/\\]+[^/\\\s]+|[/\\]+home[/\\]+[^/\\\s]+|[/\\]+Users[/\\]+[^/\\\s]+)/gi,
+    '~'
+  );
+  // 2. Sensitive configuration files (.env, keys)
+  sanitized = sanitized.replace(/\.env(?:\.[\w.-]+)?/gi, '[REDACTED_ENV]');
+  sanitized = sanitized.replace(/(?:id_rsa|id_ed25519|id_ecdsa|\.pem|\.key)\b/gi, '[REDACTED_KEY]');
+  // 3. API keys, Bearer tokens, URL credentials, and KV secret assignments
+  sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
+  sanitized = sanitized.replace(
+    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`,}\]]+)/g,
+    (full, q, rawKey, sep, rawVal) => {
+      const decodedKey = decodeUnicodeEscapes(rawKey);
+      if (SECRET_KEY_PATTERN.test(decodedKey)) {
+        if (rawVal.startsWith('"')) return `${decodedKey}="[REDACTED_TOKEN]"`;
+        if (rawVal.startsWith("'")) return `${decodedKey}='[REDACTED_TOKEN]'`;
+        return `${decodedKey}=[REDACTED_TOKEN]`;
+      }
+      return full;
+    }
+  );
+  sanitized = sanitized.replace(/(https?:\/\/)[^/\r\n@]+@/gi, '$1[REDACTED]@');
+  return sanitized;
+}
+
 function redactJsonValue(val, depth = 0) {
-  if (depth > 6) return val;
+  if (depth >= MAX_JSON_REDACT_DEPTH) return '[REDACTED_TOKEN]';
   if (typeof val === 'string') {
     let s = redactEmbeddedJson(val, depth + 1);
     s = redactStructuralJwts(s);
+    s = redactTextPrimitives(s);
     return s;
   }
   if (Array.isArray(val)) return val.map((item) => redactJsonValue(item, depth + 1));
@@ -69,11 +102,15 @@ function redactJsonValue(val, depth = 0) {
 }
 
 /**
- * Redacts embedded valid JSON objects structurally (handling Unicode escapes in keys & values
- * such as {"pass\u0077ord":"BACKSLASH_CANARY\u005c"} and double-serialized JSON strings).
+ * Redacts embedded valid JSON objects AND JSON-encoded string wrappers (including root
+ * double-serialized JSON like `"{\"password\":\"...\"}"` and deeply nested wrappers).
+ * Fail-closed: if nesting exceeds MAX_JSON_REDACT_DEPTH, redacts instead of passing raw content.
  */
 function redactEmbeddedJson(text, depth = 0) {
-  if (depth > 6 || typeof text !== 'string' || !text.includes('{')) return text;
+  if (typeof text !== 'string') return '';
+  if (depth >= MAX_JSON_REDACT_DEPTH) return '[REDACTED_TOKEN]';
+  if (!text.includes('{') && !text.includes('"')) return text;
+
   let out = '';
   let i = 0;
   while (i < text.length) {
@@ -103,6 +140,34 @@ function redactEmbeddedJson(text, depth = 0) {
           i = end + 1;
           continue;
         } catch (_) {}
+      }
+    } else if (text[i] === '"') {
+      // Check for a JSON-encoded string wrapper (e.g. root double-serialized JSON `"{\"password\":\"...\"}"`)
+      let escaped = false;
+      let end = -1;
+      for (let j = i + 1; j < text.length; j += 1) {
+        const ch = text[j];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\') { escaped = true; continue; }
+        if (ch === '"') { end = j; break; }
+      }
+      if (end !== -1) {
+        const candidate = text.slice(i, end + 1);
+        if (candidate.includes('{') || candidate.includes('\\"') || candidate.includes('\\u')) {
+          try {
+            const unwrapped = JSON.parse(candidate);
+            if (typeof unwrapped === 'string' && unwrapped !== candidate) {
+              const redactedInner = redactTextPrimitives(
+                redactStructuralJwts(redactEmbeddedJson(unwrapped, depth + 1))
+              );
+              if (redactedInner !== unwrapped) {
+                out += JSON.stringify(redactedInner);
+                i = end + 1;
+                continue;
+              }
+            }
+          } catch (_) {}
+        }
       }
     }
     out += text[i];
@@ -150,37 +215,12 @@ export function sanitizePrivacy(text, options = {}) {
   if (typeof text !== 'string') return '';
   let sanitized = text;
 
-  // 0. Structural redaction for embedded JSON objects (RFC 8259 Unicode escapes) & RFC 7519 JWTs
+  // 0. Structural redaction for embedded JSON objects/wrappers (RFC 8259) & RFC 7515/7516/7519 JWT/JWE
   sanitized = redactEmbeddedJson(sanitized);
   sanitized = redactStructuralJwts(sanitized);
 
-  // 1. Obfuscate absolute home paths on Windows/Unix (handling single or double backslashes)
-  sanitized = sanitized.replace(
-    /(?:[a-zA-Z]:[/\\]+Users[/\\]+[^/\\\s]+|[/\\]+home[/\\]+[^/\\\s]+|[/\\]+Users[/\\]+[^/\\\s]+)/gi,
-    '~'
-  );
-
-  // 2. Sensitive configuration files (.env, keys)
-  sanitized = sanitized.replace(/\.env(?:\.[\w.-]+)?/gi, '[REDACTED_ENV]');
-  sanitized = sanitized.replace(/(?:id_rsa|id_ed25519|id_ecdsa|\.pem|\.key)\b/gi, '[REDACTED_KEY]');
-
-  // 3. API keys, Bearer tokens, URL credentials (including tabs/whitespace in userinfo), and KV secret assignments
-  sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
-  sanitized = sanitized.replace(
-    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`,}\]]+)/g,
-    (full, q, rawKey, sep, rawVal) => {
-      const decodedKey = decodeUnicodeEscapes(rawKey);
-      if (SECRET_KEY_PATTERN.test(decodedKey)) {
-        if (rawVal.startsWith('"')) return `${decodedKey}="[REDACTED_TOKEN]"`;
-        if (rawVal.startsWith("'")) return `${decodedKey}='[REDACTED_TOKEN]'`;
-        return `${decodedKey}=[REDACTED_TOKEN]`;
-      }
-      return full;
-    }
-  );
-  sanitized = sanitized.replace(/(https?:\/\/)[^/\r\n@]+@/gi, '$1[REDACTED]@');
+  // 1-3. Paths, sensitive filenames, API keys, Bearer tokens, KV pairs, URL credentials
+  sanitized = redactTextPrimitives(sanitized);
 
   // 4. Project stealth mode
   if (options.stealthMode) {
