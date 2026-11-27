@@ -125,37 +125,47 @@ function parseTomlSectionSegments(rawSection) {
   let cur = '';
   let inSingle = false;
   let inDouble = false;
+  let hasSeg = false;
 
   for (let i = 0; i < rawSection.length; ) {
     const ch = rawSection[i];
     if (ch === '\\' && inDouble) {
       const dec = decodeTomlBasicEscape(rawSection, i);
       cur += dec.ch;
+      hasSeg = true;
       i += dec.advance;
       continue;
     }
     if (ch === "'" && !inDouble) {
       inSingle = !inSingle;
+      hasSeg = true;
       i += 1;
       continue;
     }
     if (ch === '"' && !inSingle) {
       inDouble = !inDouble;
+      hasSeg = true;
       i += 1;
       continue;
     }
-    if (ch === '.' && !inSingle && !inDouble) {
-      const s = cur.trim();
-      if (s) segments.push(s);
-      cur = '';
-      i += 1;
-      continue;
+    if (!inSingle && !inDouble) {
+      if (ch === ' ' || ch === '\t') {
+        i += 1;
+        continue;
+      }
+      if (ch === '.') {
+        if (hasSeg || cur.length > 0) segments.push(cur);
+        cur = '';
+        hasSeg = false;
+        i += 1;
+        continue;
+      }
     }
     cur += ch;
+    hasSeg = true;
     i += 1;
   }
-  const tail = cur.trim();
-  if (tail) segments.push(tail);
+  if (hasSeg || cur.length > 0) segments.push(cur);
   return segments;
 }
 
@@ -176,7 +186,9 @@ function parseTomlSectionHeader(line) {
   }
   if (inSingle || inDouble) return null;
   const segs = parseTomlSectionSegments(inner);
-  return segs.length > 0 ? JSON.stringify(segs) : null;
+  if (segs.length === 0) return null;
+  // Array-of-tables [[...]] must NEVER alias scalar/profile table [...] lookups
+  return isDouble ? `array:${JSON.stringify(segs)}` : JSON.stringify(segs);
 }
 
 /**
@@ -211,9 +223,11 @@ function stripTomlMultilineAndComments(raw) {
 
     if (state === 'MULTI_DOUBLE') {
       if (ch === '\\') {
-        // TOML line-ending backslash trims newline & whitespace
-        if (raw[i + 1] === '\n' || (raw[i + 1] === '\r' && raw[i + 2] === '\n')) {
-          i += (raw[i + 1] === '\r' ? 3 : 2);
+        // TOML v1.0 line-ending backslash: zero or more spaces/tabs before newline trims through all whitespace/newlines
+        let k = i + 1;
+        while (k < raw.length && (raw[k] === ' ' || raw[k] === '\t')) k += 1;
+        if (k < raw.length && (raw[k] === '\n' || raw[k] === '\r')) {
+          i = k;
           while (i < raw.length && (raw[i] === ' ' || raw[i] === '\t' || raw[i] === '\r' || raw[i] === '\n')) {
             i += 1;
           }
@@ -511,23 +525,29 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
       return null;
     }
 
-    // No sessionId provided: ONLY safe when there is a single non-truncated file with at most one session
+    // No sessionId provided: ONLY safe when there is a single non-truncated file with at most one session and intact final record
     if (files.length === 1) {
       const { text: content, truncated } = readJsonlTailSafe(files[0].full, MAX_JSONL_BYTES);
       if (!content || truncated) return null;
       const seenSids = new Set();
       let lastModel = null;
-      for (const rawLine of content.split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line) continue;
+      const lines = content.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      for (let idx = 0; idx < lines.length; idx += 1) {
+        const line = lines[idx];
         try {
           const obj = JSON.parse(line);
-          if (!obj || typeof obj !== 'object') continue;
+          if (!obj || typeof obj !== 'object') {
+            if (idx === lines.length - 1) return null;
+            continue;
+          }
           const lineSid = obj.session_id ?? obj.sessionId ?? obj.id ?? null;
           if (lineSid) seenSids.add(String(lineSid));
           const lineModel = typeof obj.model === 'string' ? obj.model : obj.message?.model;
           if (isUsableModel(lineModel)) lastModel = lineModel.trim();
-        } catch (_) {}
+        } catch (_) {
+          // Physically incomplete/corrupted trailing JSONL line without sessionId -> do not trust prior stale records
+          if (idx === lines.length - 1) return null;
+        }
       }
       if (seenSids.size <= 1) return lastModel;
     }

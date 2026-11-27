@@ -113,7 +113,19 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!unicodeAndEmptyJws.includes('UNICODE_HOST_CANARY'), 'Unicode host URL credential must be redacted');
   assert.ok(!unicodeAndEmptyJws.includes('UNDERSCORE_HOST_CANARY'), 'Underscore host URL credential must be redacted');
   assert.ok(!unicodeAndEmptyJws.includes('empty_payload_sig_999'), 'Signed JWS with empty payload must be redacted');
-  // Pre-template redaction guarantees tab->space normalization cannot leak URL secrets + empty alg=none JWT redacted
+  // Non-vacuous preset check across BOTH studio and autonomous + URL leading/colon space + escaped-newline unclosed JSON
+  const studioEngine = new StateEngine({ debounceMs: 10, config: { preset: 'studio' } });
+  const studioCheck = studioEngine.buildActivityPayload({
+    state: 'tool_call',
+    project: 'https://:SPACE PASSWORD_CANARY@my_host.test/x',
+    branch: 'https:// alice:LEADING_CANARY@mañana.test/x',
+    task: '{"password":"PRE\\\nESC_NEWLINE_CANARY',
+  });
+  const studioJson = JSON.stringify(studioCheck);
+  assert.ok(!studioJson.includes('SPACE PASSWORD_CANARY'), 'URL starting with : and space in password must be redacted');
+  assert.ok(!studioJson.includes('LEADING_CANARY'), 'URL with leading space after :// must be redacted');
+  assert.ok(!studioJson.includes('ESC_NEWLINE_CANARY'), 'Unclosed JSON string with escaped newline must be redacted');
+
   const templateBypassCheck = engine.buildActivityPayload({
     state: 'thinking',
     chatTitle: 'https\t://alice:CLOUD_DEFAULT_SECRET@my_host.test/x',
@@ -204,13 +216,36 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), null);
-    // Scalar TOML multiline values `profile="""work"""` and `model="""gpt-5"""` MUST resolve cleanly
+    // TOML line-ending backslash with horizontal whitespace + quoted spaces in profile name + [[profiles.work]] array-of-tables rejected
     fs.writeFileSync(
       path.join(tmpHome, '.codex', 'config.toml'),
-      'profile="""work"""\n[profiles.work]\nmodel="""gpt-5"""\n',
+      'profile = " work with space "\n[profiles." work with space "]\nmodel = """\\ \t \n  gpt-5"""\n',
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5');
+
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'config.toml'),
+      'profile = "work"\n[[profiles.work]]\nmodel = "CANARY_ARRAY_TABLE_PROFILE"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), null);
+
+    // Physically incomplete trailing JSONL line without sessionId MUST return null (never stale prior model)
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'sessions', 'single-truncated.jsonl'),
+      '{"model":"stale-old-model"}\n{"model":"gpt-5',
+      'utf8'
+    );
+    // Use isolated empty sessions dir containing ONLY single-truncated.jsonl
+    const isoHome = path.join(tmpHome, 'iso');
+    fs.mkdirSync(path.join(isoHome, '.codex', 'sessions'), { recursive: true });
+    fs.writeFileSync(
+      path.join(isoHome, '.codex', 'sessions', 'single-truncated.jsonl'),
+      '{"model":"stale-old-model"}\n{"model":"gpt-5',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: isoHome, env: {} }), null);
     // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
     assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
     // Claude broken JSONL / foreign session must return null

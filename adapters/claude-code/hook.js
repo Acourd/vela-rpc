@@ -87,18 +87,23 @@ export function readClaudeSessionModel(payload = {}) {
       let lastMatchedModel = null;
       let sawForeignSession = false;
       let lastUnattributedModel = null;
+      let brokenLastLine = false;
       const seenSids = new Set();
+      const nonEmptyLines = lines.map((l) => l.trim()).filter(Boolean);
 
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
+      for (let idx = 0; idx < nonEmptyLines.length; idx += 1) {
+        const line = nonEmptyLines[idx];
         let obj;
         try {
           obj = JSON.parse(line);
         } catch (_) {
+          if (idx === nonEmptyLines.length - 1) brokenLastLine = true;
           continue; // ignore malformed/broken JSONL lines
         }
-        if (!obj || typeof obj !== 'object') continue;
+        if (!obj || typeof obj !== 'object') {
+          if (idx === nonEmptyLines.length - 1) brokenLastLine = true;
+          continue;
+        }
 
         const lineSid = obj.session_id ?? obj.sessionId ?? null;
         const rawModel = typeof obj.model === 'string'
@@ -130,7 +135,7 @@ export function readClaudeSessionModel(payload = {}) {
         if (exactFileMatch && !wasTruncated && !sawForeignSession && lastUnattributedModel) {
           return lastUnattributedModel;
         }
-      } else if (!wasTruncated && seenSids.size <= 1 && lastUnattributedModel) {
+      } else if (!wasTruncated && !brokenLastLine && seenSids.size <= 1 && lastUnattributedModel) {
         return lastUnattributedModel;
       }
     } catch (_) {

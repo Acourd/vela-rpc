@@ -63,7 +63,7 @@ function redactTextPrimitives(input) {
   sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
   sanitized = sanitized.replace(
-    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*|'(?:\\.|[^'\\])*|[^\s"'`,}\]]+)/g,
+    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*|'(?:\\[\s\S]|[^'\\])*|[^\s"'`,}\]]+)/g,
     (full, q, rawKey, sep, rawVal) => {
       const decodedKey = decodeUnicodeEscapes(rawKey);
       if (SECRET_KEY_PATTERN.test(decodedKey)) {
@@ -75,7 +75,7 @@ function redactTextPrimitives(input) {
     }
   );
   sanitized = sanitized.replace(
-    /((?:h[\s]*t[\s]*t[\s]*p(?:[\s]*s)?|w[\s]*s(?:[\s]*s)?)[\s]*:[\s]*\/[\s]*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/:\s][^/]*:[^/]*)@(?=(?:[^/?#\s@]|[\t\r\n])+(?:[/?#\s]|$))/gi,
+    /((?:h\s*t\s*t\s*p(?:\s*s)?|w\s*s(?:\s*s)?)\s*:\s*\/\s*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/]*:[^/]*)@(?=(?:[^/?#\s@]|[\t\r\n])+(?:[/?#\s]|$))/gi,
     '$1[REDACTED]@'
   );
   return sanitized;
