@@ -130,7 +130,7 @@ export function readClaudeSessionModel(payload = {}) {
         if (exactFileMatch && !wasTruncated && !sawForeignSession && lastUnattributedModel) {
           return lastUnattributedModel;
         }
-      } else if (seenSids.size <= 1 && lastUnattributedModel) {
+      } else if (!wasTruncated && seenSids.size <= 1 && lastUnattributedModel) {
         return lastUnattributedModel;
       }
     } catch (_) {

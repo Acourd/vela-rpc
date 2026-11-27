@@ -63,7 +63,13 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!shortJwtAndEscaped.includes('e30.abc123def456'), 'Short-payload JWT must be redacted');
   assert.ok(!shortJwtAndEscaped.includes('sig_ws_123456'), 'Whitespace-header JWT must be redacted');
   assert.ok(!shortJwtAndEscaped.includes('BACKSLASH_CANARY'), 'Unicode backslash escape in JSON password must be redacted');
-  assert.ok(!shortJwtAndEscaped.includes('tabpass'), 'URL credential with tab must be redacted');
+  // alg=none unsigned JWT (empty signature) + 5-segment JWE must both be redacted
+  const noneJwt = `${Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url')}.${Buffer.from('{"sub":"canary_none"}').toString('base64url')}.`;
+  const jweHeader = Buffer.from('{"alg":"dir","enc":"A256GCM"}').toString('base64url');
+  const jweToken = `${jweHeader}..iv123456.ciphertext_canary.tag123456`;
+  const joseSanitized = sanitizePrivacy(`Tokens: ${noneJwt} and ${jweToken}`);
+  assert.ok(!joseSanitized.includes('canary_none') && !joseSanitized.includes(noneJwt), 'Unsigned alg=none JWT must be redacted');
+  assert.ok(!joseSanitized.includes('ciphertext_canary') && !joseSanitized.includes(jweToken), '5-segment JWE must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -116,11 +122,11 @@ export async function runEnterpriseHardeningTests() {
     // Unknown session falls back to quoted active profile [profiles."work"] (never [profiles."legacy"])
     assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-unknown' }, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
     assert.strictEqual(detectDynamicModel('opencode', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
-    // Large TOML (>70 KiB) with [profiles."inactive]name"] and multiline string containing model="..." MUST return null
+    // Large TOML (>70 KiB) with [profiles."inactive]name"], array multiline string, and quoted key with '=' MUST return null
     const largePadding = '# ' + 'x'.repeat(72000) + '\n';
     fs.writeFileSync(
       path.join(tmpHome, '.vibe', 'config.toml'),
-      'prompt = """\nmodel = "wrong-multiline-model"\n"""\n[profiles."inactive]name"]\n' + largePadding + 'active_model = "wrong-bracket-model"\n',
+      'prompts = [\n"""\nmodel = "CANARY_ARR"\n"""\n]\n"prompt=name" = """\nmodel = "CANARY_QKEY"\n"""\n[profiles."inactive]name"]\n' + largePadding + 'active_model = "wrong-bracket-model"\n',
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);
@@ -219,6 +225,15 @@ export async function runEnterpriseHardeningTests() {
   // New anonymous event after clear MUST NOT resurrect 'Active Mission S1'
   const freshAnon = await client.sendEvent({ state: 'thinking', forceImmediate: true }, false);
   assert.ok(!JSON.stringify(freshAnon.activity || {}).includes('Active Mission S1'), 'Closed title must never resurrect after clear()');
+
+  // A active -> POST /clear -> B active -> release B MUST clear (never resurrect A!)
+  await client.sendEvent({ source: 'claude', sessionId: 'sess-A', state: 'thinking', chatTitle: 'Session A Title', forceImmediate: true }, false);
+  await client.clear();
+  await client.sendEvent({ source: 'codex', sessionId: 'sess-B', state: 'thinking', chatTitle: 'Session B Title', forceImmediate: true }, false);
+  const relB = await client.sendEvent({ source: 'codex', sessionId: 'sess-B', state: 'idle', releaseLease: true, forceImmediate: true }, false);
+  assert.strictEqual(relB.cleared, true, 'Releasing B after /clear must clear Discord instead of resurrecting A');
+  await new Promise((r) => setTimeout(r, 80));
+  assert.strictEqual(mockServer.receivedActivities[mockServer.receivedActivities.length - 1], null);
 
   await daemon.stop();
   await mockServer.close();

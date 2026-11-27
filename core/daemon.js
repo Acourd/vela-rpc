@@ -422,6 +422,8 @@ export class AcourdDaemon extends EventEmitter {
     }
 
     if (req.method === 'POST' && pathname === '/clear') {
+      this.sessions.clear();
+      this.activeLease = null;
       if (this.ipc && this.ipc.ready) {
         try {
           this.ipc.clearActivity();

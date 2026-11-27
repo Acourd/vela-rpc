@@ -139,25 +139,174 @@ function parseTomlSectionHeader(line) {
   return segs.length > 0 ? JSON.stringify(segs) : null;
 }
 
-function stripTomlComment(line) {
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (escaped) { escaped = false; continue; }
-    if (ch === '\\' && inDouble) { escaped = true; continue; }
-    if (ch === "'" && !inDouble) inSingle = !inSingle;
-    else if (ch === '"' && !inSingle) inDouble = !inDouble;
-    else if (ch === '#' && !inSingle && !inDouble) return line.slice(0, i);
+/**
+ * Character-level TOML/YAML sanitizer that strips multiline strings ("""...""", '''...'''),
+ * comments outside strings, and nested array/inline-table interiors so lines inside ANY string
+ * or array (e.g. `prompts = ["""\nmodel="CANARY"\n"""]` or `"prompt=name" = """..."""`)
+ * can NEVER be mistaken for top-level TOML assignments or section headers.
+ */
+function stripTomlMultilineAndComments(raw) {
+  let out = '';
+  let i = 0;
+  let state = 'NORMAL'; // NORMAL | SINGLE | DOUBLE | MULTI_SINGLE | MULTI_DOUBLE | COMMENT
+  let braceDepth = 0; // tracks [...] on RHS and {...} inline tables
+  let atLineStart = true;
+
+  while (i < raw.length) {
+    const ch = raw[i];
+    const next3 = raw.slice(i, i + 3);
+
+    if (state === 'COMMENT') {
+      if (ch === '\n' || ch === '\r') {
+        state = 'NORMAL';
+        atLineStart = true;
+        out += ch;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === 'MULTI_DOUBLE') {
+      if (ch === '\\') { i += 2; continue; }
+      if (next3 === '"""') {
+        state = 'NORMAL';
+        out += '""';
+        i += 3;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === 'MULTI_SINGLE') {
+      if (next3 === "'''") {
+        state = 'NORMAL';
+        out += "''";
+        i += 3;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === 'DOUBLE') {
+      if (ch === '\\') {
+        if (braceDepth === 0) out += raw.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        state = 'NORMAL';
+        if (braceDepth === 0) out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === '\n' || ch === '\r') {
+        state = 'NORMAL';
+        atLineStart = true;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (braceDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === 'SINGLE') {
+      if (ch === "'") {
+        state = 'NORMAL';
+        if (braceDepth === 0) out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === '\n' || ch === '\r') {
+        state = 'NORMAL';
+        atLineStart = true;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (braceDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+
+    // NORMAL state
+    if (ch === '#') {
+      state = 'COMMENT';
+      i += 1;
+      continue;
+    }
+    if (next3 === '"""') {
+      state = 'MULTI_DOUBLE';
+      i += 3;
+      continue;
+    }
+    if (next3 === "'''") {
+      state = 'MULTI_SINGLE';
+      i += 3;
+      continue;
+    }
+    if (ch === '"') {
+      state = 'DOUBLE';
+      if (braceDepth === 0) out += ch;
+      atLineStart = false;
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      state = 'SINGLE';
+      if (braceDepth === 0) out += ch;
+      atLineStart = false;
+      i += 1;
+      continue;
+    }
+    if (ch === '\n' || ch === '\r') {
+      atLineStart = true;
+      if (braceDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === ' ' || ch === '\t') {
+      if (braceDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '[' && !atLineStart) {
+      braceDepth += 1;
+      i += 1;
+      continue;
+    }
+    if (ch === ']' && braceDepth > 0) {
+      braceDepth -= 1;
+      i += 1;
+      continue;
+    }
+    if (ch === '{') {
+      braceDepth += 1;
+      i += 1;
+      continue;
+    }
+    if (ch === '}' && braceDepth > 0) {
+      braceDepth -= 1;
+      i += 1;
+      continue;
+    }
+
+    atLineStart = false;
+    if (braceDepth === 0) out += ch;
+    i += 1;
   }
-  return line;
+
+  return out;
 }
 
 /**
- * Full-file, section-aware, multiline-string-aware TOML/YAML model extractor.
+ * Full-file, section-aware, character-level multiline-string-aware TOML/YAML model extractor.
  * Preserves exact segment boundaries via JSON array keys (so [profiles."a.b"] != [profiles.a.b]),
- * skips multiline strings ("""...""" / '''...'''), honors active `profile`, and NEVER reads inactive profiles.
+ * strips all multiline strings / nested arrays / inline tables / comments before parsing,
+ * honors active `profile`, and NEVER reads inactive profiles.
  */
 export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   if (!raw || typeof raw !== 'string') return null;
@@ -165,46 +314,12 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   const ROOT_KEY = '[]';
   const sections = { [ROOT_KEY]: {} };
   let currentSection = ROOT_KEY;
-  let multilineDelim = null; // '"""' or "'''"
 
-  const lines = raw.split(/\r?\n/);
+  const cleaned = stripTomlMultilineAndComments(raw);
+  const lines = cleaned.split(/\r?\n/);
   for (const rawLine of lines) {
-    // Handle multiline TOML string state
-    if (multilineDelim) {
-      let idx = 0;
-      while (idx < rawLine.length) {
-        if (multilineDelim === '"""' && rawLine[idx] === '\\') {
-          idx += 2;
-          continue;
-        }
-        if (rawLine.startsWith(multilineDelim, idx)) {
-          multilineDelim = null;
-          break;
-        }
-        idx += 1;
-      }
-      continue;
-    }
-
-    const line = stripTomlComment(rawLine).trim();
+    const line = rawLine.trim();
     if (!line) continue;
-
-    // Detect start of multiline string value on assignment line (e.g. prompt = """... or prompt = '''...)
-    const multiMatch = line.match(/^[A-Za-z0-9_."' -]+\s*=\s*("""|''')(.*)$/);
-    if (multiMatch) {
-      const delim = multiMatch[1];
-      const rest = multiMatch[2];
-      // Check if closed on the same line
-      let closed = false;
-      for (let i = 0; i < rest.length; i += 1) {
-        if (delim === '"""' && rest[i] === '\\') { i += 1; continue; }
-        if (rest.startsWith(delim, i)) { closed = true; break; }
-      }
-      if (!closed) {
-        multilineDelim = delim;
-      }
-      continue;
-    }
 
     const parsedHeader = parseTomlSectionHeader(line);
     if (parsedHeader !== null) {

@@ -105,22 +105,35 @@ function redactEmbeddedJson(text) {
 }
 
 /**
- * Structurally detects and redacts ANY RFC 7515/7519 JWT/JWS/JWE token (including headers with whitespace).
+ * Structurally detects and redacts ANY RFC 7515/7516/7519 JWT/JWS (including alg=none with empty signature)
+ * and 5-segment JWE tokens (including headers with whitespace).
  */
 function redactStructuralJwts(text) {
-  return text.replace(/\b([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]{4,})\b/g, (full, h) => {
+  const isJoseHeader = (seg) => {
     try {
-      const padded = h.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (h.length % 4)) % 4);
+      const padded = seg.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (seg.length % 4)) % 4);
       const decoded = Buffer.from(padded, 'base64').toString('utf8');
       const headerObj = JSON.parse(decoded);
       if (headerObj && typeof headerObj === 'object' && !Array.isArray(headerObj)) {
-        if ('alg' in headerObj || 'typ' in headerObj || 'enc' in headerObj) {
-          return '[REDACTED_TOKEN]';
-        }
+        return ('alg' in headerObj || 'typ' in headerObj || 'enc' in headerObj);
       }
     } catch (_) {}
-    return full;
-  });
+    return false;
+  };
+
+  // 1. 5-segment JWE (header.encrypted_key.iv.ciphertext.tag)
+  let out = text.replace(
+    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
+    (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
+  );
+
+  // 2. 3-segment JWS/JWT (including alg=none with empty trailing signature `header.payload.`)
+  out = out.replace(
+    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_.-])/g,
+    (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
+  );
+
+  return out;
 }
 
 /**
