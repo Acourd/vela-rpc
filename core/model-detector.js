@@ -403,21 +403,218 @@ function stripTomlMultilineAndComments(raw) {
 }
 
 /**
+ * Character-level YAML preprocessor that strips comments, block scalars (including with
+ * anchors/tags like `&a !!str |2-`), flow collections (`{...}`, `[...]`), and collapses
+ * multiline single/double-quoted strings onto their opening line so inner lines can never
+ * masquerade as YAML mapping keys.
+ */
+function preprocessYaml(raw) {
+  let out = '';
+  let state = 'NORMAL'; // NORMAL | DOUBLE | SINGLE | COMMENT | BLOCK_SCALAR
+  let quoteBuf = '';
+  let quoteMultiline = false;
+  let flowDepth = 0;
+  let blockParentIndent = -1;
+  let curLineIndent = 0;
+  let atLineStart = true;
+
+  const BLOCK_SCALAR_HEADER_RE = /^(?:[ \t]*(?:&[^\s,[\]{}]+|!(?:<[^>]*>|[^\s,[\]{}]*)))*[ \t]*[|>](?:[+-]?\d*|\d+[+-]?)[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/;
+
+  for (let i = 0; i < raw.length; ) {
+    const ch = raw[i];
+
+    if (state === 'BLOCK_SCALAR') {
+      // Scan current line to check indent vs blockParentIndent
+      let lineEnd = i;
+      while (lineEnd < raw.length && raw[lineEnd] !== '\n' && raw[lineEnd] !== '\r') lineEnd += 1;
+      const lineText = raw.slice(i, lineEnd);
+      const isBlank = /^[ \t]*$/.test(lineText);
+      const indent = lineText.match(/^[ \t]*/)[0].replace(/\t/g, '  ').length;
+      if (isBlank || indent > blockParentIndent) {
+        out += '\n';
+        i = lineEnd;
+        if (raw[i] === '\r' && raw[i + 1] === '\n') i += 2;
+        else if (raw[i] === '\n' || raw[i] === '\r') i += 1;
+        atLineStart = true;
+        curLineIndent = 0;
+        continue;
+      }
+      state = 'NORMAL';
+      atLineStart = true;
+      curLineIndent = 0;
+      continue;
+    }
+
+    if (state === 'COMMENT') {
+      if (ch === '\n' || ch === '\r') {
+        state = 'NORMAL';
+        atLineStart = true;
+        curLineIndent = 0;
+        if (flowDepth === 0) out += ch;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === 'DOUBLE') {
+      if (ch === '\\') {
+        const next = raw[i + 1];
+        if (next === '\r' && raw[i + 2] === '\n') {
+          quoteMultiline = true;
+          i += 3;
+          continue;
+        }
+        if (next === '\n' || next === '\r') {
+          quoteMultiline = true;
+          i += 2;
+          continue;
+        }
+        const dec = decodeTomlBasicEscape(raw, i);
+        quoteBuf += dec.ch;
+        i += dec.advance;
+        continue;
+      }
+      if (ch === '"') {
+        state = 'NORMAL';
+        if (flowDepth === 0) {
+          out += JSON.stringify(quoteBuf);
+        }
+        quoteBuf = '';
+        quoteMultiline = false;
+        i += 1;
+        continue;
+      }
+      if (ch === '\n' || ch === '\r') {
+        quoteMultiline = true;
+        quoteBuf += ' ';
+        if (ch === '\r' && raw[i + 1] === '\n') i += 2;
+        else i += 1;
+        continue;
+      }
+      quoteBuf += ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === 'SINGLE') {
+      if (ch === "'" && raw[i + 1] === "'") {
+        quoteBuf += "'";
+        i += 2;
+        continue;
+      }
+      if (ch === "'") {
+        state = 'NORMAL';
+        if (flowDepth === 0) {
+          out += JSON.stringify(quoteBuf);
+        }
+        quoteBuf = '';
+        quoteMultiline = false;
+        i += 1;
+        continue;
+      }
+      if (ch === '\n' || ch === '\r') {
+        quoteMultiline = true;
+        quoteBuf += ' ';
+        if (ch === '\r' && raw[i + 1] === '\n') i += 2;
+        else i += 1;
+        continue;
+      }
+      quoteBuf += ch;
+      i += 1;
+      continue;
+    }
+
+    // NORMAL state
+    if (ch === '\n' || ch === '\r') {
+      atLineStart = true;
+      curLineIndent = 0;
+      if (flowDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+    if (atLineStart && (ch === ' ' || ch === '\t')) {
+      curLineIndent += ch === '\t' ? 2 : 1;
+      if (flowDepth === 0) out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '#' && (atLineStart || raw[i - 1] === ' ' || raw[i - 1] === '\t')) {
+      state = 'COMMENT';
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      atLineStart = false;
+      state = 'DOUBLE';
+      quoteBuf = '';
+      quoteMultiline = false;
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      atLineStart = false;
+      state = 'SINGLE';
+      quoteBuf = '';
+      quoteMultiline = false;
+      i += 1;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      atLineStart = false;
+      flowDepth += 1;
+      i += 1;
+      continue;
+    }
+    if ((ch === '}' || ch === ']') && flowDepth > 0) {
+      flowDepth -= 1;
+      i += 1;
+      continue;
+    }
+    if (flowDepth === 0 && ch === ':' && (raw[i + 1] === ' ' || raw[i + 1] === '\t' || raw[i + 1] === '\n' || raw[i + 1] === '\r' || i + 1 === raw.length)) {
+      const rest = raw.slice(i + 1);
+      const blockMatch = rest.match(BLOCK_SCALAR_HEADER_RE);
+      if (blockMatch) {
+        out += ':\n';
+        blockParentIndent = curLineIndent;
+        state = 'BLOCK_SCALAR';
+        i += 1 + blockMatch[0].length;
+        atLineStart = true;
+        curLineIndent = 0;
+        continue;
+      }
+    }
+
+    atLineStart = false;
+    if (flowDepth === 0) out += ch;
+    i += 1;
+  }
+
+  return out;
+}
+
+/**
  * Full-file, section-aware, character-level multiline-string-aware TOML/YAML model extractor.
  * Preserves exact segment boundaries via JSON array keys (so [profiles."a.b"] != [profiles.a.b]),
- * strips all multiline strings / nested arrays / inline tables / comments before parsing,
- * honors active `profile`, and NEVER reads inactive profiles.
+ * strips all multiline strings / nested arrays / inline tables / comments / YAML block scalars
+ * before parsing, honors active `profile`, and NEVER reads inactive profiles.
  */
 export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format = 'auto') {
   if (!raw || typeof raw !== 'string') return null;
 
+  let effectiveFormat = format;
+  if (effectiveFormat === 'auto') {
+    const looksToml = /^[ \t]*\[/m.test(raw) || /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*=/m.test(raw);
+    const looksYaml = /^[ \t]*["']?[A-Za-z0-9_.-]+["']?[ \t]*:(?:\s|$)/m.test(raw);
+    if (looksYaml && !looksToml) effectiveFormat = 'yaml';
+  }
+
   const ROOT_KEY = '[]';
   const sections = { [ROOT_KEY]: {} };
   let currentSection = ROOT_KEY;
-  let isTomlSection = format === 'toml';
+  let isTomlSection = effectiveFormat === 'toml';
   const yamlStack = [];
 
-  const cleaned = format === 'yaml' ? raw : stripTomlMultilineAndComments(raw);
+  const cleaned = effectiveFormat === 'yaml' ? preprocessYaml(raw) : stripTomlMultilineAndComments(raw);
   const lines = cleaned.split(/\r?\n/);
   for (const rawLine of lines) {
     const indent = rawLine.match(/^[ \t]*/)[0].replace(/\t/g, '  ').length;
@@ -433,7 +630,7 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format =
       }
     }
 
-    if (format !== 'yaml') {
+    if (effectiveFormat !== 'yaml') {
       const parsedHeader = parseTomlSectionHeader(line);
       if (parsedHeader !== null) {
         yamlStack.length = 0;
@@ -445,11 +642,15 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format =
     }
 
     if (!isTomlSection) {
+      if (line === '---' || line === '...') {
+        yamlStack.length = 0;
+        continue;
+      }
       if (/^-(?:\s|$)/.test(line)) {
         yamlStack.push({ indent, key: '__seq__', blockScalar: false });
         continue;
       }
-      const yamlHeaderMatch = line.match(/^("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_.-]+)\s*:\s*([|>](?:[+-]?\d*|\d+[+-]?))?\s*(?:#.*)?$/);
+      const yamlHeaderMatch = line.match(/^("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_.-]+)\s*:\s*(?:(?:&[^\s,[\]{}]+|!(?:<[^>]*>|[^\s,[\]{}]*))\s*)*([|>](?:[+-]?\d*|\d+[+-]?))?\s*(?:#.*)?$/);
       if (yamlHeaderMatch) {
         const hdrKey = decodeTomlValueString(yamlHeaderMatch[1]);
         yamlStack.push({ indent, key: hdrKey, blockScalar: Boolean(yamlHeaderMatch[2]) });
@@ -457,7 +658,13 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format =
       }
     }
 
-    const kvMatch = line.match(/^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*([:=])\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*(?:#.*)?$/);
+    const kvRegex = effectiveFormat === 'yaml'
+      ? /^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*(:)\s+(?:(?:&[^\s,[\]{}]+|!(?:<[^>]*>|[^\s,[\]{}]*))\s+)*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*(?:#.*)?$/
+      : effectiveFormat === 'toml'
+        ? /^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*(=)\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*(?:#.*)?$/
+        : /^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*([:=])\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*(?:#.*)?$/;
+
+    const kvMatch = line.match(kvRegex);
     if (kvMatch) {
       const key = kvMatch[1].trim();
       const sep = kvMatch[2];
@@ -471,6 +678,7 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null, format =
         } else {
           targetSection = ROOT_KEY;
         }
+        yamlStack.push({ indent, key: '__scalar_cont__', blockScalar: true });
       }
       if (!sections[targetSection]) sections[targetSection] = {};
       sections[targetSection][key] = val;
@@ -615,7 +823,7 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
   if (id === 'codex') {
     rawModel =
       extractModelFromJsonlDir(path.join(home, '.codex', 'sessions'), sessionId) ||
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.codex', 'config.toml')), explicitProfile) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.codex', 'config.toml')), explicitProfile, 'toml') ||
       env.CODEX_MODEL ||
       env.OPENAI_MODEL ||
       null;
@@ -638,7 +846,7 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
       null;
   } else if (id === 'kimi-code' || id === 'kimi') {
     rawModel =
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.kimi', 'config.toml')), safePayload.profile || options.profile || env.KIMI_PROFILE || null) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.kimi', 'config.toml')), safePayload.profile || options.profile || env.KIMI_PROFILE || null, 'toml') ||
       extractModelFromJson(readConfigFileFromStart(path.join(home, '.kimi', 'config.json'))) ||
       env.KIMI_MODEL ||
       null;
@@ -656,7 +864,7 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
       null;
   } else if (id === 'mistral-vibe') {
     rawModel =
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.vibe', 'config.toml')), safePayload.profile || options.profile || env.VIBE_PROFILE || null) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.vibe', 'config.toml')), safePayload.profile || options.profile || env.VIBE_PROFILE || null, 'toml') ||
       env.VIBE_MODEL ||
       env.MISTRAL_MODEL ||
       null;

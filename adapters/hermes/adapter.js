@@ -10,22 +10,17 @@ import path from 'node:path';
 import { COGNITIVE_STATES } from '../../core/constants.js';
 import { HARNESS_IDS, HARNESSES } from '../../core/harnesses.js';
 import { formatModelName, detectGitBranch } from '../../core/antigravity-telemetry.js';
-import { detectDynamicModel } from '../../core/model-detector.js';
+import { detectDynamicModel, extractModelFromTomlOrYaml } from '../../core/model-detector.js';
 
 const HERMES_DIR = path.join(os.homedir(), '.hermes');
 
 /**
  * Extracts configured default model from ~/.hermes/config.yaml without external YAML deps.
+ * Delegates to the canonical indentation- & block-scalar-aware YAML parser.
  */
 export function parseHermesConfigModel(yamlText) {
   if (!yamlText || typeof yamlText !== 'string') return null;
-  // Match either top-level `model: ...` or nested `default: ...` under `model:`
-  const direct = yamlText.match(/^\s*model:\s*["']?([A-Za-z0-9_./:-]+)["']?\s*$/m);
-  if (direct && direct[1] && direct[1] !== 'null') return direct[1].trim();
-
-  const nested = yamlText.match(/^\s*default_model:\s*["']?([A-Za-z0-9_./:-]+)["']?\s*$/m);
-  if (nested && nested[1]) return nested[1].trim();
-  return null;
+  return extractModelFromTomlOrYaml(yamlText, null, 'yaml');
 }
 
 /**

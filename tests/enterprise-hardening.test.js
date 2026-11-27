@@ -256,6 +256,13 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
+    // YAML anchors, tags, multiline single/double quotes, flow collections, and TOML `=` MUST NOT fabricate models in YAML
+    fs.writeFileSync(
+      path.join(tmpHome, '.hermes', 'config.yaml'),
+      'a: &anc |\n  model: YAML_ANCHOR_CANARY\nb: !!str |2-\n  model: YAML_TAG_CANARY\nc: "hello\nmodel: YAML_DQ_CANARY\n"\nd: \'it\'\'s\nmodel: YAML_SQ_CANARY\n\'\ne: {\n  model: YAML_FLOW_CANARY\n}\nmodel = "TOML_EQ_IN_YAML_CANARY"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
     fs.writeFileSync(
       path.join(tmpHome, '.hermes', 'config.yaml'),
       'inactive:\n  model: wrong-nested-only\n',
