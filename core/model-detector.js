@@ -414,32 +414,68 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   const ROOT_KEY = '[]';
   const sections = { [ROOT_KEY]: {} };
   let currentSection = ROOT_KEY;
+  let isTomlSection = false;
+  const yamlStack = [];
 
   const cleaned = stripTomlMultilineAndComments(raw);
   const lines = cleaned.split(/\r?\n/);
   for (const rawLine of lines) {
+    const indent = rawLine.match(/^[ \t]*/)[0].replace(/\t/g, '  ').length;
     const line = rawLine.trim();
     if (!line) continue;
 
     const parsedHeader = parseTomlSectionHeader(line);
     if (parsedHeader !== null) {
+      yamlStack.length = 0;
+      isTomlSection = true;
       currentSection = parsedHeader;
       if (!sections[currentSection]) sections[currentSection] = {};
       continue;
     }
 
-    const kvMatch = line.match(/^["']?([A-Za-z0-9_.-]+)["']?\s*[:=]\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*$/);
+    if (!isTomlSection) {
+      while (yamlStack.length > 0 && indent <= yamlStack[yamlStack.length - 1].indent) {
+        yamlStack.pop();
+      }
+      if (yamlStack.length > 0 && yamlStack[yamlStack.length - 1].blockScalar) {
+        continue;
+      }
+      if (/^-(?:\s|$)/.test(line)) {
+        yamlStack.push({ indent, key: '__seq__', blockScalar: false });
+        continue;
+      }
+      const yamlHeaderMatch = line.match(/^("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_.-]+)\s*:\s*([|>][+-]?\d*)?\s*$/);
+      if (yamlHeaderMatch) {
+        const hdrKey = decodeTomlValueString(yamlHeaderMatch[1]);
+        yamlStack.push({ indent, key: hdrKey, blockScalar: Boolean(yamlHeaderMatch[2]) });
+        continue;
+      }
+    }
+
+    const kvMatch = line.match(/^["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)["']?\s*([:=])\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_./:-]+)\s*$/);
     if (kvMatch) {
       const key = kvMatch[1].trim();
-      const val = decodeTomlValueString(kvMatch[2]);
-      if (!sections[currentSection]) sections[currentSection] = {};
-      sections[currentSection][key] = val;
+      const sep = kvMatch[2];
+      const val = decodeTomlValueString(kvMatch[3]);
+      let targetSection = currentSection;
+      if (sep === ':' && !isTomlSection) {
+        if (yamlStack.length > 0) {
+          targetSection = JSON.stringify(yamlStack.map((x) => x.key));
+        } else if (indent > 0) {
+          targetSection = '__indented_orphan__';
+        } else {
+          targetSection = ROOT_KEY;
+        }
+      }
+      if (!sections[targetSection]) sections[targetSection] = {};
+      sections[targetSection][key] = val;
     }
   }
 
-  const pickModel = (obj) => {
+  const pickModel = (obj, allowDefault = false) => {
     if (!obj) return null;
-    for (const k of ['active_model', 'default_model', 'model']) {
+    const keys = allowDefault ? ['active_model', 'default_model', 'model', 'default'] : ['active_model', 'default_model', 'model'];
+    for (const k of keys) {
       if (isUsableModel(obj[k])) return obj[k];
     }
     return null;
@@ -458,7 +494,7 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   const rootModel = pickModel(sections[ROOT_KEY]);
   if (rootModel) return rootModel;
 
-  return pickModel(sections[JSON.stringify(['default'])]) || pickModel(sections[JSON.stringify(['model'])]) || null;
+  return pickModel(sections[JSON.stringify(['default'])]) || pickModel(sections[JSON.stringify(['model'])], true) || null;
 }
 
 /**
@@ -592,12 +628,12 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
       null;
   } else if (id === 'hermes') {
     rawModel =
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.hermes', 'config.yaml'))) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.hermes', 'config.yaml')), safePayload.profile || options.profile || env.HERMES_PROFILE || null) ||
       env.HERMES_MODEL ||
       null;
   } else if (id === 'kimi-code' || id === 'kimi') {
     rawModel =
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.kimi', 'config.toml'))) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.kimi', 'config.toml')), safePayload.profile || options.profile || env.KIMI_PROFILE || null) ||
       extractModelFromJson(readConfigFileFromStart(path.join(home, '.kimi', 'config.json'))) ||
       env.KIMI_MODEL ||
       null;
@@ -615,7 +651,7 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
       null;
   } else if (id === 'mistral-vibe') {
     rawModel =
-      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.vibe', 'config.toml')), safePayload.profile || env.VIBE_PROFILE || null) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.vibe', 'config.toml')), safePayload.profile || options.profile || env.VIBE_PROFILE || null) ||
       env.VIBE_MODEL ||
       env.MISTRAL_MODEL ||
       null;

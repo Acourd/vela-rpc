@@ -136,10 +136,11 @@ export async function runEnterpriseHardeningTests() {
 
   const userOnlyLeadingSpace = engine.buildActivityPayload({
     state: 'thinking',
-    chatTitle: 'https:// USER_ONLY_CANARY@my_host.test/x postgres://admin:DB_PASS_CANARY@db.internal:5432/app',
+    chatTitle: 'https:// USER_ONLY_CANARY@my_host.test/x postgres://admin:DB_PASS_CANARY@db.internal:5432/app x://alice:SINGLE_SCHEME_CANARY@my_host.test/x',
   });
   assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('USER_ONLY_CANARY'), 'User-only URL credential with leading space must be redacted');
   assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('DB_PASS_CANARY'), 'Non-HTTP URI credentials must be redacted');
+  assert.ok(!JSON.stringify(userOnlyLeadingSpace).includes('SINGLE_SCHEME_CANARY'), 'Single-letter RFC 3986 URI scheme credentials must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -232,6 +233,28 @@ export async function runEnterpriseHardeningTests() {
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5');
     assert.strictEqual(detectDynamicModel('codex', { profile: ' work with space ' }, { homeDir: tmpHome, env: {} }), 'GPT 5');
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: { CODEX_PROFILE: ' work with space ' } }), 'GPT 5');
+
+    // Vibe must honor options.profile, and nested YAML keys must never overwrite root model
+    fs.writeFileSync(
+      path.join(tmpHome, '.vibe', 'config.toml'),
+      'active_model = "mistral-small"\n[profiles." work "]\nactive_model = "devstral-2"\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {}, profile: ' work ' }), 'Devstral 2');
+
+    fs.mkdirSync(path.join(tmpHome, '.hermes'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.hermes', 'config.yaml'),
+      'model: claude-sonnet-4-6\nfallback:\n  model: wrong-nested-model\nnotes: |\n  model: wrong-block-scalar\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
+    fs.writeFileSync(
+      path.join(tmpHome, '.hermes', 'config.yaml'),
+      'inactive:\n  model: wrong-nested-only\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('hermes', {}, { homeDir: tmpHome, env: {} }), null);
 
     fs.writeFileSync(
       path.join(tmpHome, '.codex', 'config.toml'),
