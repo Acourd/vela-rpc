@@ -135,8 +135,8 @@ export function translateClaudeEvent(hookName, payload = {}, cwd = process.cwd()
     || payload.model_name
     || readClaudeSessionModel(payload)
     || process.env.ANTHROPIC_MODEL
-    || 'Claude';
-  const model = formatModelName(detectedModel);
+    || null;
+  const model = detectedModel ? formatModelName(detectedModel) : null;
 
   const sessionId = payload.sessionId || payload.session_id || undefined;
   const sessionTitle = payload.session_name

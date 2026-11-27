@@ -62,9 +62,17 @@ export function sanitizePrivacy(text, options = {}) {
   sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, 'Bearer [REDACTED_TOKEN]');
+  sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
   sanitized = sanitized.replace(
-    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*["']?([^\s"'`,}\]]{3,})["']?/gi,
+    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*"(?:\\.|[^"\\])*"/gi,
+    '$1="[REDACTED_TOKEN]"'
+  );
+  sanitized = sanitized.replace(
+    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*'(?:\\.|[^'\\])*'/gi,
+    "$1='[REDACTED_TOKEN]'"
+  );
+  sanitized = sanitized.replace(
+    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*([^\s"'`,}\]]+)/gi,
     '$1=[REDACTED_TOKEN]'
   );
   sanitized = sanitized.replace(/(https?:\/\/)[^/\s]+@/gi, '$1[REDACTED]@');
@@ -137,22 +145,23 @@ export class StateEngine extends EventEmitter {
 
     const incomingHarnessKey = String(event.harness || event.source || event.agentName || '').toLowerCase() || null;
     const incomingSessionKey = event.sessionId || event.session_id || null;
+    const hasPriorContext = this.currentHarnessKey !== null || this.currentSessionKey !== null;
     const switchedHarness = Boolean(
       incomingHarnessKey && this.currentHarnessKey && incomingHarnessKey !== this.currentHarnessKey
     );
     const switchedSession = Boolean(
-      incomingSessionKey && this.currentSessionKey && incomingSessionKey !== this.currentSessionKey
+      hasPriorContext && incomingSessionKey !== this.currentSessionKey
     );
 
     if (switchedHarness || switchedSession) {
-      // Never bleed previous harness/session model or chat title into a new harness/session
+      // Never bleed previous harness/session model or chat title into a new harness/session (including anonymous -> identified)
       this.currentContext.model = null;
       this.currentContext.chatTitle = null;
       this.currentContext.task = null;
       this.currentContext.tool = null;
     }
     if (incomingHarnessKey) this.currentHarnessKey = incomingHarnessKey;
-    if (incomingSessionKey) this.currentSessionKey = incomingSessionKey;
+    this.currentSessionKey = incomingSessionKey;
 
     if (event.project !== undefined) this.currentContext.project = event.project;
     if (event.branch !== undefined) this.currentContext.branch = event.branch;

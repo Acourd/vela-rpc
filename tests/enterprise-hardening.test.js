@@ -19,6 +19,7 @@ import { detectDynamicModel } from '../core/model-detector.js';
 import { translateClaudeEvent } from '../adapters/claude-code/hook.js';
 import { translateCodexEvent } from '../adapters/codex/adapter.js';
 import { readHermesTelemetry } from '../adapters/hermes/adapter.js';
+import { readSelectedModel } from '../core/antigravity-telemetry.js';
 import { AcourdDaemon } from '../core/daemon.js';
 import { AcourdClient } from '../adapters/generic-client.js';
 import { MockDiscordServer } from './mock-discord-ipc.js';
@@ -46,10 +47,13 @@ export async function runEnterpriseHardeningTests() {
     ],
   });
 
-  // Quoted JSON secrets must also be redacted
-  const jsonSanitized = sanitizePrivacy('Payload {"api_key": "top_secret_json_999", "token":"abc_secret_777"}');
+  // Quoted JSON secrets (including spaces and short values) and short Bearer tokens must be redacted
+  const jsonSanitized = sanitizePrivacy('Payload {"api_key": "top_secret_json_999", "token":"abc_secret_777", "password":"prefix space_tail_7", "password":"xy"} Authorization: Bearer abc');
   assert.ok(!jsonSanitized.includes('top_secret_json_999'), 'Quoted JSON api_key must be redacted');
   assert.ok(!jsonSanitized.includes('abc_secret_777'), 'Quoted JSON token must be redacted');
+  assert.ok(!jsonSanitized.includes('space_tail_7'), 'Quoted JSON value with spaces must be fully redacted');
+  assert.ok(!jsonSanitized.includes('"xy"'), 'Short quoted JSON secret must be redacted');
+  assert.ok(!jsonSanitized.includes('Bearer abc'), 'Short Bearer token must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -77,17 +81,17 @@ export async function runEnterpriseHardeningTests() {
     fs.mkdirSync(path.join(tmpHome, '.codex', 'sessions'), { recursive: true });
     fs.writeFileSync(
       path.join(tmpHome, '.codex', 'config.toml'),
-      'profile = "work"\n\n[profiles.legacy]\nmodel = "old-legacy-model"\n\n[profiles.work]\nmodel = "gpt-5.4-codex"\n',
+      'profile = "work"\n\n[profiles."legacy"]\nmodel = "old-legacy-model"\n\n[profiles."work"]\nmodel = "gpt-5.4-codex"\n',
       'utf8'
     );
     fs.writeFileSync(
-      path.join(tmpHome, '.codex', 'sessions', 'sess-a.jsonl'),
-      '{"session_id":"sess-a","model":"gpt-5"}\n',
+      path.join(tmpHome, '.codex', 'sessions', 'session-123-other.jsonl'),
+      '{"session_id":"session-123-other","model":"o4-mini"}\n',
       'utf8'
     );
     fs.writeFileSync(
-      path.join(tmpHome, '.codex', 'sessions', 'sess-b.jsonl'),
-      '{"session_id":"sess-b","model":"o4-mini"}\n',
+      path.join(tmpHome, '.codex', 'sessions', 'mixed.jsonl'),
+      '{"session_id":"session-123","model":"gpt-5"}\n{"session_id":"session-456","model":"wrong-other-model"}\n',
       'utf8'
     );
 
@@ -97,25 +101,34 @@ export async function runEnterpriseHardeningTests() {
     fs.mkdirSync(path.join(tmpHome, '.vibe'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, '.vibe', 'config.toml'), '[profiles.inactive]\nactive_model = "wrong-model"\n', 'utf8');
 
-    // Session-correlated JSONL: sess-a gets GPT 5; unknown session falls back to active profile [profiles.work] (never sess-b or [profiles.legacy])
-    assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-a' }, { homeDir: tmpHome, env: {} }), 'GPT 5');
+    // Exact session correlation: session-123 gets GPT 5 from mixed.jsonl (never wrong-other-model, never session-123-other.jsonl)
+    assert.strictEqual(detectDynamicModel('codex', { sessionId: 'session-123' }, { homeDir: tmpHome, env: {} }), 'GPT 5');
+    // Unknown session falls back to quoted active profile [profiles."work"] (never [profiles."legacy"])
     assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-unknown' }, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
     assert.strictEqual(detectDynamicModel('opencode', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
     // Inactive TOML profile MUST NOT be selected
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);
-    // Zero static fabrication when unconfigured:
+    // Zero static fabrication across ALL harnesses (including Claude & Antigravity):
     assert.strictEqual(detectDynamicModel('deepseek', {}, { homeDir: tmpHome, env: {} }), null);
     assert.strictEqual(detectDynamicModel('kimi-code', {}, { homeDir: tmpHome, env: {} }), null);
+    assert.strictEqual(readSelectedModel(path.join(tmpHome, 'missing_state.pbtxt')), null);
+    const claudeNoModel = translateClaudeEvent('UserPromptSubmit', { session_id: 'no-model-sess' }, tmpHome);
+    if (!process.env.ANTHROPIC_MODEL) {
+      assert.strictEqual(claudeNoModel.model, null, 'Claude adapter must not fabricate static Claude model');
+    }
     // Hermes readHermesTelemetry returns null model when unconfigured (no static 'Hermes 4')
     const hermesEmpty = await readHermesTelemetry({ hermesDir: path.join(tmpHome, '.hermes-empty') });
     assert.strictEqual(hermesEmpty.model, null, 'readHermesTelemetry must not fabricate Hermes 4');
     // Adapter preserves sessionId
     assert.strictEqual(translateCodexEvent('working', { session_id: 'cx-1' }).sessionId, 'cx-1');
-    // Switching harness in StateEngine clears stale previous model
+    // Switching harness OR transitioning anonymous -> identified session clears stale model & title
     const switchEngine = new StateEngine({ debounceMs: 10, config: { preset: 'autonomous' } });
-    switchEngine.processEvent({ harness: 'claude-code', state: 'thinking', chatTitle: 'T1', model: 'Claude Opus 5.5', forceImmediate: true });
+    switchEngine.processEvent({ harness: 'codex', state: 'thinking', chatTitle: 'Anon Chat', model: 'GPT 5', forceImmediate: true });
+    const anonToId = switchEngine.processEvent({ harness: 'codex', sessionId: 'codex-1', state: 'thinking', forceImmediate: true });
+    assert.ok(!JSON.stringify(anonToId.activity).includes('GPT 5'), 'Anonymous model must not bleed into newly identified session');
+    assert.ok(!JSON.stringify(anonToId.activity).includes('Anon Chat'), 'Anonymous title must not bleed into newly identified session');
     const sw = switchEngine.processEvent({ harness: 'deepseek', state: 'thinking', chatTitle: 'T2', forceImmediate: true });
-    assert.ok(!JSON.stringify(sw.activity).includes('Claude Opus 5.5'), 'Previous harness model must not bleed into new harness');
+    assert.ok(!JSON.stringify(sw.activity).includes('GPT 5'), 'Previous harness model must not bleed into new harness');
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }

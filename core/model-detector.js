@@ -62,9 +62,38 @@ function extractModelFromJson(raw) {
   return null;
 }
 
+function normalizeTomlSection(rawSection) {
+  return rawSection
+    .split('.')
+    .map((seg) => seg.trim().replace(/^["'](.*)["']$/, '$1').trim())
+    .filter(Boolean)
+    .join('.');
+}
+
+function stripTomlComment(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inDouble) {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    else if (ch === '#' && !inSingle && !inDouble) return line.slice(0, i);
+  }
+  return line;
+}
+
 /**
  * Section-aware TOML/YAML model extractor.
- * Honors top-level `profile = "<name>"` (checking `[profiles.<name>]` first),
+ * Honors top-level `profile = "<name>"` (checking `[profiles.<name>]` / `[profiles."<name>"]` first),
  * and NEVER reads models from inactive `[profiles.*]` sections.
  */
 export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
@@ -75,17 +104,17 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
 
   const lines = raw.split(/\r?\n/);
   for (const rawLine of lines) {
-    const line = rawLine.replace(/#.*$/, '').trim();
+    const line = stripTomlComment(rawLine).trim();
     if (!line) continue;
 
     const secMatch = line.match(/^\[([^\]]+)\]$/);
     if (secMatch) {
-      currentSection = secMatch[1].trim();
+      currentSection = normalizeTomlSection(secMatch[1]);
       if (!sections[currentSection]) sections[currentSection] = {};
       continue;
     }
 
-    const kvMatch = line.match(/^([A-Za-z0-9_.-]+)\s*[:=]\s*["']?([A-Za-z0-9_./:-]+)["']?\s*$/);
+    const kvMatch = line.match(/^["']?([A-Za-z0-9_.-]+)["']?\s*[:=]\s*["']?([A-Za-z0-9_./:-]+)["']?\s*$/);
     if (kvMatch) {
       const key = kvMatch[1].trim();
       const val = kvMatch[2].trim();
@@ -105,10 +134,11 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   // 1. Active profile explicitly requested or declared at top level
   const activeProfile = explicitProfile || sections[''].profile || sections[''].active_profile || null;
   if (activeProfile) {
+    const normProfile = String(activeProfile).trim().replace(/^["'](.*)["']$/, '$1');
     const profModel =
-      pickModel(sections[`profiles.${activeProfile}`]) ||
-      pickModel(sections[`profile.${activeProfile}`]) ||
-      pickModel(sections[activeProfile]);
+      pickModel(sections[`profiles.${normProfile}`]) ||
+      pickModel(sections[`profile.${normProfile}`]) ||
+      pickModel(sections[normProfile]);
     if (profModel) return profModel;
   }
 
@@ -121,9 +151,9 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
 }
 
 /**
- * Session-correlated JSONL model extractor.
- * When `sessionId` is provided, ONLY inspects a JSONL file correlated with that exact sessionId
- * (by filename or embedded session_id/id field) — never attributes another session's model.
+ * Strictly session-correlated JSONL model extractor.
+ * Parses line-by-line JSON; never matches filenames by substring (`session-123` != `session-123-other`)
+ * and in mixed JSONL files only extracts models from lines belonging to the exact requested `sessionId`.
  */
 function extractModelFromJsonlDir(dirPath, sessionId = null) {
   try {
@@ -132,7 +162,7 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
       .filter((f) => f.endsWith('.jsonl'))
       .map((f) => {
         const full = path.join(dirPath, f);
-        return { name: f, full, mtime: fs.statSync(full).mtimeMs };
+        return { name: f, baseName: f.replace(/\.jsonl$/i, ''), full, mtime: fs.statSync(full).mtimeMs };
       })
       .sort((a, b) => b.mtime - a.mtime);
 
@@ -141,31 +171,69 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
     if (sessionId) {
       const sid = String(sessionId).trim();
       for (const file of files) {
-        const filenameMatches = file.name.includes(sid);
+        const exactFileMatch = file.baseName === sid;
         const content = readTextSafe(file.full, 65536);
         if (!content) continue;
-        const contentMatches =
-          content.includes(`"session_id":"${sid}"`) ||
-          content.includes(`"session_id": "${sid}"`) ||
-          content.includes(`"sessionId":"${sid}"`) ||
-          content.includes(`"sessionId": "${sid}"`) ||
-          content.includes(`"id":"${sid}"`) ||
-          content.includes(`"id": "${sid}"`);
-        if (!filenameMatches && !contentMatches) continue;
 
-        const matches = [...content.matchAll(/"model"\s*:\s*"([A-Za-z0-9_./:-]+)"/g)];
-        if (matches.length > 0) return matches[matches.length - 1][1];
+        let lastMatchedModel = null;
+        let sawForeignSession = false;
+        let lastUnattributedModel = null;
+
+        for (const rawLine of content.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          let obj;
+          try {
+            obj = JSON.parse(line);
+          } catch (_) {
+            continue;
+          }
+          if (!obj || typeof obj !== 'object') continue;
+
+          const lineSid = obj.session_id ?? obj.sessionId ?? obj.id ?? null;
+          const lineModel = typeof obj.model === 'string'
+            ? obj.model
+            : (typeof obj.message?.model === 'string' ? obj.message.model : null);
+
+          if (lineSid !== null && String(lineSid).trim() !== '') {
+            if (String(lineSid).trim() === sid) {
+              if (isUsableModel(lineModel)) lastMatchedModel = lineModel.trim();
+            } else {
+              sawForeignSession = true;
+            }
+          } else if (exactFileMatch && isUsableModel(lineModel)) {
+            lastUnattributedModel = lineModel.trim();
+          }
+        }
+
+        if (lastMatchedModel) return lastMatchedModel;
+        if (exactFileMatch && !sawForeignSession && lastUnattributedModel) {
+          return lastUnattributedModel;
+        }
       }
-      // Explicit sessionId did not match any JSONL file -> do NOT steal another session's model
+      // Explicit sessionId did not match any JSONL record -> never steal another session's model
       return null;
     }
 
-    // No sessionId provided: only safe when there is a single unambiguous session file
+    // No sessionId provided: only safe when there is a single unambiguous session file with at most one session
     if (files.length === 1) {
       const tail = readTextSafe(files[0].full, 32768);
       if (!tail) return null;
-      const matches = [...tail.matchAll(/"model"\s*:\s*"([A-Za-z0-9_./:-]+)"/g)];
-      if (matches.length > 0) return matches[matches.length - 1][1];
+      const seenSids = new Set();
+      let lastModel = null;
+      for (const rawLine of tail.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (!obj || typeof obj !== 'object') continue;
+          const lineSid = obj.session_id ?? obj.sessionId ?? obj.id ?? null;
+          if (lineSid) seenSids.add(String(lineSid));
+          const lineModel = typeof obj.model === 'string' ? obj.model : obj.message?.model;
+          if (isUsableModel(lineModel)) lastModel = lineModel.trim();
+        } catch (_) {}
+      }
+      if (seenSids.size <= 1) return lastModel;
     }
   } catch (_) {}
   return null;

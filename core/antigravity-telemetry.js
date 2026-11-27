@@ -257,14 +257,14 @@ export function parseWorkspaceUri(uriStr) {
  */
 export function readSelectedModel(statePath = DEFAULT_STATE_PATH) {
   try {
-    if (!fs.existsSync(statePath)) return 'Gemini AI';
+    if (!fs.existsSync(statePath)) return null;
     const content = fs.readFileSync(statePath, 'utf8');
     const match = content.match(/last_selected_agent_model:\s*([A-Za-z0-9_.-]+)/);
     if (match && match[1]) {
       return formatModelName(match[1]);
     }
   } catch (_) {}
-  return 'Gemini AI';
+  return null;
 }
 
 /**
