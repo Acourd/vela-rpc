@@ -113,6 +113,14 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!unicodeAndEmptyJws.includes('UNICODE_HOST_CANARY'), 'Unicode host URL credential must be redacted');
   assert.ok(!unicodeAndEmptyJws.includes('UNDERSCORE_HOST_CANARY'), 'Underscore host URL credential must be redacted');
   assert.ok(!unicodeAndEmptyJws.includes('empty_payload_sig_999'), 'Signed JWS with empty payload must be redacted');
+  // Pre-template redaction guarantees tab->space normalization cannot leak URL secrets + empty alg=none JWT redacted
+  const templateBypassCheck = engine.buildActivityPayload({
+    state: 'thinking',
+    chatTitle: 'https\t://alice:CLOUD_DEFAULT_SECRET@my_host.test/x',
+    model: `${Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url')}..`,
+  });
+  assert.ok(!JSON.stringify(templateBypassCheck).includes('CLOUD_DEFAULT_SECRET'), 'Template whitespace normalization must never leak URL credentials');
+  assert.ok(!JSON.stringify(templateBypassCheck).includes('eyJhbGci'), 'alg=none empty-payload+empty-sig JWT must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -196,6 +204,13 @@ export async function runEnterpriseHardeningTests() {
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), null);
+    // Scalar TOML multiline values `profile="""work"""` and `model="""gpt-5"""` MUST resolve cleanly
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'config.toml'),
+      'profile="""work"""\n[profiles.work]\nmodel="""gpt-5"""\n',
+      'utf8'
+    );
+    assert.strictEqual(detectDynamicModel('codex', {}, { homeDir: tmpHome, env: {} }), 'GPT 5');
     // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
     assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
     // Claude broken JSONL / foreign session must return null

@@ -75,7 +75,7 @@ function redactTextPrimitives(input) {
     }
   );
   sanitized = sanitized.replace(
-    /((?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p(?:[\t\r\n]*s)?|w[\t\r\n]*s(?:[\t\r\n]*s)?)[\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/:\s][^/]*:[^/]*)@(?=(?:[^/?#\s@]|[\t\r\n])+(?:[/?#\s]|$))/gi,
+    /((?:h[\s]*t[\s]*t[\s]*p(?:[\s]*s)?|w[\s]*s(?:[\s]*s)?)[\s]*:[\s]*\/[\s]*\/)(?:[^/\s]*(?:[\t\r\n]+[^/\s]*)*|[^/:\s][^/]*:[^/]*)@(?=(?:[^/?#\s@]|[\t\r\n])+(?:[/?#\s]|$))/gi,
     '$1[REDACTED]@'
   );
   return sanitized;
@@ -226,10 +226,10 @@ function redactStructuralJwts(text) {
     (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 
-  // 2. 3-segment JWS/JWT (including alg=none with empty trailing signature AND signed JWS with empty payload)
+  // 2. 3-segment JWS/JWT (including alg=none with empty payload/signature AND signed JWS with empty payload)
   out = out.replace(
     /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]*)\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
-    (full, h, p, sig) => ((p.length > 0 || sig.length > 0) && isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
+    (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 
   return out;
@@ -384,20 +384,30 @@ export class StateEngine extends EventEmitter {
         : `Executing: ${this.currentContext.tool}`;
     }
 
+    // Sanitize all interpolated inputs BEFORE template whitespace normalization (prevents tab->space bypasses)
+    const cleanField = (val) => sanitizePrivacy(val, { stealthMode: effectiveStealth });
+    const safeProject = cleanField(project);
+    const safeBranch = cleanField(branch);
+    const safeChatTitle = cleanField(chatTitle);
+    const safeModel = cleanField(model);
+    const safeTask = cleanField(rawTask);
+    const safeAgent = cleanField(shortAgent);
+    const safeTool = cleanField(this.currentContext.tool != null ? String(this.currentContext.tool) : '');
+
     const templateVars = {
-      project,
-      branch,
-      chat: chatTitle,
-      chat_or_task: chatTitle || rawTask || localized.label,
-      model,
+      project: safeProject,
+      branch: safeBranch,
+      chat: safeChatTitle,
+      chat_or_task: safeChatTitle || safeTask || localized.label,
+      model: safeModel,
       status: conciseStatus,
       steps,
-      task: rawTask,
+      task: safeTask,
       state: localized.label,
-      task_or_state: rawTask || localized.label,
+      task_or_state: safeTask || localized.label,
       emoji: cfg.showEmojis ? localized.emoji : '',
-      agent: shortAgent,
-      tool: this.currentContext.tool || '',
+      agent: safeAgent,
+      tool: safeTool,
     };
 
     let detailsText = renderTemplate(cfg.detailsTemplate, templateVars);

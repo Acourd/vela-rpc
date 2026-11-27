@@ -192,6 +192,7 @@ function stripTomlMultilineAndComments(raw) {
   let braceDepth = 0; // tracks [...] on RHS and {...} inline tables
   let atLineStart = true;
   let inSectionHeader = false;
+  let multiBuf = '';
 
   while (i < raw.length) {
     const ch = raw[i];
@@ -209,16 +210,33 @@ function stripTomlMultilineAndComments(raw) {
     }
 
     if (state === 'MULTI_DOUBLE') {
-      if (ch === '\\') { i += 2; continue; }
+      if (ch === '\\') {
+        // TOML line-ending backslash trims newline & whitespace
+        if (raw[i + 1] === '\n' || (raw[i + 1] === '\r' && raw[i + 2] === '\n')) {
+          i += (raw[i + 1] === '\r' ? 3 : 2);
+          while (i < raw.length && (raw[i] === ' ' || raw[i] === '\t' || raw[i] === '\r' || raw[i] === '\n')) {
+            i += 1;
+          }
+          continue;
+        }
+        const dec = decodeTomlBasicEscape(raw, i);
+        if (braceDepth === 0) multiBuf += dec.ch;
+        i += dec.advance;
+        continue;
+      }
       if (next3 === '"""') {
-        // TOML v1.0: up to 2 trailing quotes before closing """ (total run of 3..5 quotes closes multiline string)
         let qCount = 3;
         while (qCount < 5 && raw[i + qCount] === '"') qCount += 1;
         state = 'NORMAL';
-        if (braceDepth === 0) out += '""';
+        if (braceDepth === 0) {
+          multiBuf += '"'.repeat(qCount - 3);
+          out += JSON.stringify(multiBuf);
+        }
+        multiBuf = '';
         i += qCount;
         continue;
       }
+      if (braceDepth === 0) multiBuf += ch;
       i += 1;
       continue;
     }
@@ -228,10 +246,15 @@ function stripTomlMultilineAndComments(raw) {
         let qCount = 3;
         while (qCount < 5 && raw[i + qCount] === "'") qCount += 1;
         state = 'NORMAL';
-        if (braceDepth === 0) out += "''";
+        if (braceDepth === 0) {
+          multiBuf += "'".repeat(qCount - 3);
+          out += JSON.stringify(multiBuf);
+        }
+        multiBuf = '';
         i += qCount;
         continue;
       }
+      if (braceDepth === 0) multiBuf += ch;
       i += 1;
       continue;
     }
@@ -289,12 +312,18 @@ function stripTomlMultilineAndComments(raw) {
     }
     if (!inSectionHeader && next3 === '"""') {
       state = 'MULTI_DOUBLE';
+      multiBuf = '';
       i += 3;
+      if (raw[i] === '\r' && raw[i + 1] === '\n') i += 2;
+      else if (raw[i] === '\n') i += 1;
       continue;
     }
     if (!inSectionHeader && next3 === "'''") {
       state = 'MULTI_SINGLE';
+      multiBuf = '';
       i += 3;
+      if (raw[i] === '\r' && raw[i + 1] === '\n') i += 2;
+      else if (raw[i] === '\n') i += 1;
       continue;
     }
     if (ch === '"') {
