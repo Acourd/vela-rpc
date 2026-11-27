@@ -63,13 +63,17 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!shortJwtAndEscaped.includes('e30.abc123def456'), 'Short-payload JWT must be redacted');
   assert.ok(!shortJwtAndEscaped.includes('sig_ws_123456'), 'Whitespace-header JWT must be redacted');
   assert.ok(!shortJwtAndEscaped.includes('BACKSLASH_CANARY'), 'Unicode backslash escape in JSON password must be redacted');
-  // alg=none unsigned JWT (empty signature) + 5-segment JWE must both be redacted
+  // alg=none unsigned JWT, 5-segment JWE, JWT followed by trailing dot `.`, and double-serialized JSON
   const noneJwt = `${Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url')}.${Buffer.from('{"sub":"canary_none"}').toString('base64url')}.`;
   const jweHeader = Buffer.from('{"alg":"dir","enc":"A256GCM"}').toString('base64url');
   const jweToken = `${jweHeader}..iv123456.ciphertext_canary.tag123456`;
-  const joseSanitized = sanitizePrivacy(`Tokens: ${noneJwt} and ${jweToken}`);
+  const signedJwtWithPeriod = `eyJhbGciOiJIUzI1NiJ9.e30.sig_period_999.`;
+  const doubleSerializedJson = JSON.stringify({ outer: JSON.stringify({ password: 'nested_canary_777' }) });
+  const joseSanitized = sanitizePrivacy(`Tokens: ${noneJwt} and ${jweToken} and ${signedJwtWithPeriod} ${doubleSerializedJson}`);
   assert.ok(!joseSanitized.includes('canary_none') && !joseSanitized.includes(noneJwt), 'Unsigned alg=none JWT must be redacted');
   assert.ok(!joseSanitized.includes('ciphertext_canary') && !joseSanitized.includes(jweToken), '5-segment JWE must be redacted');
+  assert.ok(!joseSanitized.includes('sig_period_999'), 'JWT followed by sentence period must be redacted');
+  assert.ok(!joseSanitized.includes('nested_canary_777'), 'Double-serialized JSON password must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -122,11 +126,11 @@ export async function runEnterpriseHardeningTests() {
     // Unknown session falls back to quoted active profile [profiles."work"] (never [profiles."legacy"])
     assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-unknown' }, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
     assert.strictEqual(detectDynamicModel('opencode', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
-    // Large TOML (>70 KiB) with [profiles."inactive]name"], array multiline string, and quoted key with '=' MUST return null
+    // Nested multiline TOML arrays + Unicode escaped segment "a\u002eb" MUST NOT confuse profile names or emit array strings
     const largePadding = '# ' + 'x'.repeat(72000) + '\n';
     fs.writeFileSync(
       path.join(tmpHome, '.vibe', 'config.toml'),
-      'prompts = [\n"""\nmodel = "CANARY_ARR"\n"""\n]\n"prompt=name" = """\nmodel = "CANARY_QKEY"\n"""\n[profiles."inactive]name"]\n' + largePadding + 'active_model = "wrong-bracket-model"\n',
+      'profile = "au002eb"\nprompts = [\n  [\'x\'],\n  \'model=CLOUD_CANARY_NESTED_ARRAY\'\n]\n"prompt=name" = """\nmodel = "CANARY_QKEY"\n"""\n[profiles."a\\u002eb"]\nactive_model = "wrong-unicode-profile"\n[profiles."inactive]name"]\n' + largePadding + 'active_model = "wrong-bracket-model"\n',
       'utf8'
     );
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);

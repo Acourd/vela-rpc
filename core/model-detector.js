@@ -80,39 +80,56 @@ function extractModelFromJson(raw) {
   return null;
 }
 
+function decodeTomlBasicEscape(str, backslashIdx) {
+  const next = str[backslashIdx + 1];
+  if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(str.slice(backslashIdx + 2, backslashIdx + 6))) {
+    return { ch: String.fromCharCode(parseInt(str.slice(backslashIdx + 2, backslashIdx + 6), 16)), advance: 6 };
+  }
+  if (next === 'U' && /^[0-9a-fA-F]{8}$/.test(str.slice(backslashIdx + 2, backslashIdx + 10))) {
+    try {
+      return { ch: String.fromCodePoint(parseInt(str.slice(backslashIdx + 2, backslashIdx + 10), 16)), advance: 10 };
+    } catch (_) {}
+  }
+  const simple = { '"': '"', '\\': '\\', n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' };
+  if (next && Object.prototype.hasOwnProperty.call(simple, next)) {
+    return { ch: simple[next], advance: 2 };
+  }
+  return { ch: next || '', advance: 2 };
+}
+
 function parseTomlSectionSegments(rawSection) {
   const segments = [];
   let cur = '';
   let inSingle = false;
   let inDouble = false;
-  let escaped = false;
 
-  for (let i = 0; i < rawSection.length; i += 1) {
+  for (let i = 0; i < rawSection.length; ) {
     const ch = rawSection[i];
-    if (escaped) {
-      cur += ch;
-      escaped = false;
-      continue;
-    }
     if (ch === '\\' && inDouble) {
-      escaped = true;
+      const dec = decodeTomlBasicEscape(rawSection, i);
+      cur += dec.ch;
+      i += dec.advance;
       continue;
     }
     if (ch === "'" && !inDouble) {
       inSingle = !inSingle;
+      i += 1;
       continue;
     }
     if (ch === '"' && !inSingle) {
       inDouble = !inDouble;
+      i += 1;
       continue;
     }
     if (ch === '.' && !inSingle && !inDouble) {
       const s = cur.trim();
       if (s) segments.push(s);
       cur = '';
+      i += 1;
       continue;
     }
     cur += ch;
+    i += 1;
   }
   const tail = cur.trim();
   if (tail) segments.push(tail);
@@ -273,7 +290,7 @@ function stripTomlMultilineAndComments(raw) {
       i += 1;
       continue;
     }
-    if (ch === '[' && !atLineStart) {
+    if (ch === '[' && (!atLineStart || braceDepth > 0)) {
       braceDepth += 1;
       i += 1;
       continue;

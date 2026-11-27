@@ -46,15 +46,21 @@ function decodeUnicodeEscapes(str) {
   return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-function redactJsonValue(val) {
-  if (Array.isArray(val)) return val.map(redactJsonValue);
+function redactJsonValue(val, depth = 0) {
+  if (depth > 6) return val;
+  if (typeof val === 'string') {
+    let s = redactEmbeddedJson(val, depth + 1);
+    s = redactStructuralJwts(s);
+    return s;
+  }
+  if (Array.isArray(val)) return val.map((item) => redactJsonValue(item, depth + 1));
   if (val && typeof val === 'object') {
     const out = {};
     for (const [k, v] of Object.entries(val)) {
       if (SECRET_KEY_PATTERN.test(k)) {
         out[k] = '[REDACTED_TOKEN]';
       } else {
-        out[k] = redactJsonValue(v);
+        out[k] = redactJsonValue(v, depth + 1);
       }
     }
     return out;
@@ -64,14 +70,15 @@ function redactJsonValue(val) {
 
 /**
  * Redacts embedded valid JSON objects structurally (handling Unicode escapes in keys & values
- * such as {"pass\u0077ord":"BACKSLASH_CANARY\u005c"} without corrupting delimiters).
+ * such as {"pass\u0077ord":"BACKSLASH_CANARY\u005c"} and double-serialized JSON strings).
  */
-function redactEmbeddedJson(text) {
+function redactEmbeddedJson(text, depth = 0) {
+  if (depth > 6 || typeof text !== 'string' || !text.includes('{')) return text;
   let out = '';
   let i = 0;
   while (i < text.length) {
     if (text[i] === '{') {
-      let depth = 0;
+      let depthBrace = 0;
       let inStr = false;
       let escaped = false;
       let end = -1;
@@ -81,10 +88,10 @@ function redactEmbeddedJson(text) {
         if (ch === '\\' && inStr) { escaped = true; continue; }
         if (ch === '"') { inStr = !inStr; continue; }
         if (!inStr) {
-          if (ch === '{') depth += 1;
+          if (ch === '{') depthBrace += 1;
           else if (ch === '}') {
-            depth -= 1;
-            if (depth === 0) { end = j; break; }
+            depthBrace -= 1;
+            if (depthBrace === 0) { end = j; break; }
           }
         }
       }
@@ -92,7 +99,7 @@ function redactEmbeddedJson(text) {
         const candidate = text.slice(i, end + 1);
         try {
           const parsed = JSON.parse(candidate);
-          out += JSON.stringify(redactJsonValue(parsed));
+          out += JSON.stringify(redactJsonValue(parsed, depth + 1));
           i = end + 1;
           continue;
         } catch (_) {}
@@ -127,9 +134,9 @@ function redactStructuralJwts(text) {
     (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 
-  // 2. 3-segment JWS/JWT (including alg=none with empty trailing signature `header.payload.`)
+  // 2. 3-segment JWS/JWT (including alg=none with empty trailing signature AND JWTs followed by sentence punctuation `.`)
   out = out.replace(
-    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_.-])/g,
+    /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g,
     (full, h) => (isJoseHeader(h) ? '[REDACTED_TOKEN]' : full)
   );
 
