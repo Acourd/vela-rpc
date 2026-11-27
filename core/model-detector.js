@@ -1,7 +1,7 @@
 /**
  * Vela RPC — Dynamic Model Detector (Zero Dependencies)
  * Resolves the real active model dynamically from event payload, local harness
- * config/session files (section-aware TOML, JSON, YAML, session-correlated JSONL),
+ * config/session files (full-file multiline-aware TOML, JSON, YAML, session-correlated JSONL),
  * and environment variables. Never fabricates a hardcoded static model when none is detected.
  */
 
@@ -10,24 +10,42 @@ import os from 'node:os';
 import path from 'node:path';
 import { formatModelName } from './antigravity-telemetry.js';
 
-function readTextSafe(filePath, maxBytes = 65536) {
+const MAX_CONFIG_BYTES = 4 * 1024 * 1024;
+const MAX_JSONL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Reads a config file strictly from byte 0 (never tail-seeks a config file so headers/context are never lost).
+ * Returns null if the file exceeds MAX_CONFIG_BYTES.
+ */
+function readConfigFileFromStart(filePath, maxBytes = MAX_CONFIG_BYTES) {
   try {
     if (!filePath || !fs.existsSync(filePath)) return null;
     const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return null;
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (_) {
+    return null;
+  }
+}
+
+function readJsonlTailSafe(filePath, maxBytes = MAX_JSONL_BYTES) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { text: null, truncated: false };
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return { text: null, truncated: false };
     if (stat.size <= maxBytes) {
-      return fs.readFileSync(filePath, 'utf8');
+      return { text: fs.readFileSync(filePath, 'utf8'), truncated: false };
     }
     const fd = fs.openSync(filePath, 'r');
     try {
       const buf = Buffer.alloc(maxBytes);
-      const bytesRead = fs.readSync(fd, buf, 0, maxBytes, Math.max(0, stat.size - maxBytes));
-      return buf.subarray(0, bytesRead).toString('utf8');
+      const bytesRead = fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
+      return { text: buf.subarray(0, bytesRead).toString('utf8'), truncated: true };
     } finally {
       fs.closeSync(fd);
     }
   } catch (_) {
-    return null;
+    return { text: null, truncated: false };
   }
 }
 
@@ -62,7 +80,7 @@ function extractModelFromJson(raw) {
   return null;
 }
 
-function normalizeTomlSection(rawSection) {
+function parseTomlSectionSegments(rawSection) {
   const segments = [];
   let cur = '';
   let inSingle = false;
@@ -98,12 +116,11 @@ function normalizeTomlSection(rawSection) {
   }
   const tail = cur.trim();
   if (tail) segments.push(tail);
-  return segments.join('.');
+  return segments;
 }
 
 function parseTomlSectionHeader(line) {
   if (!line.startsWith('[') || !line.endsWith(']')) return null;
-  // Support [[array]] or [table], respecting quoted brackets like [profiles."inactive]name"]
   const isDouble = line.startsWith('[[') && line.endsWith(']]');
   const inner = isDouble ? line.slice(2, -2) : line.slice(1, -1);
   let inSingle = false;
@@ -118,7 +135,8 @@ function parseTomlSectionHeader(line) {
     else if ((ch === '[' || ch === ']') && !inSingle && !inDouble) return null;
   }
   if (inSingle || inDouble) return null;
-  return normalizeTomlSection(inner);
+  const segs = parseTomlSectionSegments(inner);
+  return segs.length > 0 ? JSON.stringify(segs) : null;
 }
 
 function stripTomlComment(line) {
@@ -127,14 +145,8 @@ function stripTomlComment(line) {
   let escaped = false;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\' && inDouble) {
-      escaped = true;
-      continue;
-    }
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inDouble) { escaped = true; continue; }
     if (ch === "'" && !inDouble) inSingle = !inSingle;
     else if (ch === '"' && !inSingle) inDouble = !inDouble;
     else if (ch === '#' && !inSingle && !inDouble) return line.slice(0, i);
@@ -143,20 +155,56 @@ function stripTomlComment(line) {
 }
 
 /**
- * Section-aware TOML/YAML model extractor.
- * Honors top-level `profile = "<name>"` (checking `[profiles.<name>]` / `[profiles."<name>"]` first),
- * and NEVER reads models from inactive `[profiles.*]` sections.
+ * Full-file, section-aware, multiline-string-aware TOML/YAML model extractor.
+ * Preserves exact segment boundaries via JSON array keys (so [profiles."a.b"] != [profiles.a.b]),
+ * skips multiline strings ("""...""" / '''...'''), honors active `profile`, and NEVER reads inactive profiles.
  */
 export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
   if (!raw || typeof raw !== 'string') return null;
 
-  const sections = { '': {} };
-  let currentSection = '';
+  const ROOT_KEY = '[]';
+  const sections = { [ROOT_KEY]: {} };
+  let currentSection = ROOT_KEY;
+  let multilineDelim = null; // '"""' or "'''"
 
   const lines = raw.split(/\r?\n/);
   for (const rawLine of lines) {
+    // Handle multiline TOML string state
+    if (multilineDelim) {
+      let idx = 0;
+      while (idx < rawLine.length) {
+        if (multilineDelim === '"""' && rawLine[idx] === '\\') {
+          idx += 2;
+          continue;
+        }
+        if (rawLine.startsWith(multilineDelim, idx)) {
+          multilineDelim = null;
+          break;
+        }
+        idx += 1;
+      }
+      continue;
+    }
+
     const line = stripTomlComment(rawLine).trim();
     if (!line) continue;
+
+    // Detect start of multiline string value on assignment line (e.g. prompt = """... or prompt = '''...)
+    const multiMatch = line.match(/^[A-Za-z0-9_."' -]+\s*=\s*("""|''')(.*)$/);
+    if (multiMatch) {
+      const delim = multiMatch[1];
+      const rest = multiMatch[2];
+      // Check if closed on the same line
+      let closed = false;
+      for (let i = 0; i < rest.length; i += 1) {
+        if (delim === '"""' && rest[i] === '\\') { i += 1; continue; }
+        if (rest.startsWith(delim, i)) { closed = true; break; }
+      }
+      if (!closed) {
+        multilineDelim = delim;
+      }
+      continue;
+    }
 
     const parsedHeader = parseTomlSectionHeader(line);
     if (parsedHeader !== null) {
@@ -182,29 +230,25 @@ export function extractModelFromTomlOrYaml(raw, explicitProfile = null) {
     return null;
   };
 
-  // 1. Active profile explicitly requested or declared at top level
-  const activeProfile = explicitProfile || sections[''].profile || sections[''].active_profile || null;
+  const activeProfile = explicitProfile || sections[ROOT_KEY].profile || sections[ROOT_KEY].active_profile || null;
   if (activeProfile) {
     const normProfile = String(activeProfile).trim().replace(/^["'](.*)["']$/, '$1');
     const profModel =
-      pickModel(sections[`profiles.${normProfile}`]) ||
-      pickModel(sections[`profile.${normProfile}`]) ||
-      pickModel(sections[normProfile]);
+      pickModel(sections[JSON.stringify(['profiles', normProfile])]) ||
+      pickModel(sections[JSON.stringify(['profile', normProfile])]) ||
+      pickModel(sections[JSON.stringify([normProfile])]);
     if (profModel) return profModel;
   }
 
-  // 2. Top-level root section (never inactive [profiles.*])
-  const rootModel = pickModel(sections['']);
+  const rootModel = pickModel(sections[ROOT_KEY]);
   if (rootModel) return rootModel;
 
-  // 3. Dedicated [default] or [model] section only
-  return pickModel(sections.default) || pickModel(sections.model) || null;
+  return pickModel(sections[JSON.stringify(['default'])]) || pickModel(sections[JSON.stringify(['model'])]) || null;
 }
 
 /**
  * Strictly session-correlated JSONL model extractor.
- * Parses line-by-line JSON; never matches filenames by substring (`session-123` != `session-123-other`)
- * and in mixed JSONL files only extracts models from lines belonging to the exact requested `sessionId`.
+ * Never guesses from a truncated mixed file when sessionId is omitted.
  */
 function extractModelFromJsonlDir(dirPath, sessionId = null) {
   try {
@@ -221,19 +265,13 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
 
     if (sessionId) {
       const sid = String(sessionId).trim();
-      const MAX_JSONL_BYTES = 4 * 1024 * 1024;
       for (const file of files) {
         const exactFileMatch = file.baseName === sid;
-        let stat;
-        try { stat = fs.statSync(file.full); } catch (_) { continue; }
-        const wasTruncated = stat.size > MAX_JSONL_BYTES;
-        const content = readTextSafe(file.full, MAX_JSONL_BYTES);
+        const { text: content, truncated } = readJsonlTailSafe(file.full, MAX_JSONL_BYTES);
         if (!content) continue;
 
         let lines = content.split(/\r?\n/);
-        if (wasTruncated && lines.length > 0) {
-          lines = lines.slice(1); // discard partial leading line after tail seek
-        }
+        if (truncated && lines.length > 0) lines = lines.slice(1);
 
         let lastMatchedModel = null;
         let sawForeignSession = false;
@@ -243,11 +281,7 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
           const line = rawLine.trim();
           if (!line) continue;
           let obj;
-          try {
-            obj = JSON.parse(line);
-          } catch (_) {
-            continue;
-          }
+          try { obj = JSON.parse(line); } catch (_) { continue; }
           if (!obj || typeof obj !== 'object') continue;
 
           const lineSid = obj.session_id ?? obj.sessionId ?? obj.id ?? null;
@@ -261,27 +295,26 @@ function extractModelFromJsonlDir(dirPath, sessionId = null) {
             } else {
               sawForeignSession = true;
             }
-          } else if (exactFileMatch && !wasTruncated && isUsableModel(lineModel)) {
+          } else if (exactFileMatch && !truncated && isUsableModel(lineModel)) {
             lastUnattributedModel = lineModel.trim();
           }
         }
 
         if (lastMatchedModel) return lastMatchedModel;
-        if (exactFileMatch && !wasTruncated && !sawForeignSession && lastUnattributedModel) {
+        if (exactFileMatch && !truncated && !sawForeignSession && lastUnattributedModel) {
           return lastUnattributedModel;
         }
       }
-      // Explicit sessionId did not match any JSONL record -> never steal another session's model
       return null;
     }
 
-    // No sessionId provided: only safe when there is a single unambiguous session file with at most one session
+    // No sessionId provided: ONLY safe when there is a single non-truncated file with at most one session
     if (files.length === 1) {
-      const tail = readTextSafe(files[0].full, 32768);
-      if (!tail) return null;
+      const { text: content, truncated } = readJsonlTailSafe(files[0].full, MAX_JSONL_BYTES);
+      if (!content || truncated) return null;
       const seenSids = new Set();
       let lastModel = null;
-      for (const rawLine of tail.split(/\r?\n/)) {
+      for (const rawLine of content.split(/\r?\n/)) {
         const line = rawLine.trim();
         if (!line) continue;
         try {
@@ -320,65 +353,65 @@ export function detectDynamicModel(harnessId, payload = {}, options = {}) {
   if (id === 'codex') {
     rawModel =
       extractModelFromJsonlDir(path.join(home, '.codex', 'sessions'), sessionId) ||
-      extractModelFromTomlOrYaml(readTextSafe(path.join(home, '.codex', 'config.toml')), explicitProfile) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.codex', 'config.toml')), explicitProfile) ||
       env.CODEX_MODEL ||
       env.OPENAI_MODEL ||
       null;
   } else if (id === 'opencode') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.config', 'opencode', 'opencode.json'))) ||
-      extractModelFromJson(readTextSafe(path.join(home, '.opencode', 'config.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.config', 'opencode', 'opencode.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.opencode', 'config.json'))) ||
       env.OPENCODE_MODEL ||
       null;
   } else if (id === 'openchamber') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.openchamber', 'config.json'))) ||
-      extractModelFromJson(readTextSafe(path.join(home, '.config', 'openchamber', 'config.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.openchamber', 'config.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.config', 'openchamber', 'config.json'))) ||
       env.OPENCHAMBER_MODEL ||
       null;
   } else if (id === 'hermes') {
     rawModel =
-      extractModelFromTomlOrYaml(readTextSafe(path.join(home, '.hermes', 'config.yaml'))) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.hermes', 'config.yaml'))) ||
       env.HERMES_MODEL ||
       null;
   } else if (id === 'kimi-code' || id === 'kimi') {
     rawModel =
-      extractModelFromTomlOrYaml(readTextSafe(path.join(home, '.kimi', 'config.toml'))) ||
-      extractModelFromJson(readTextSafe(path.join(home, '.kimi', 'config.json'))) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.kimi', 'config.toml'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.kimi', 'config.json'))) ||
       env.KIMI_MODEL ||
       null;
   } else if (id === 'deepseek') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.deepseek', 'config.json'))) ||
-      extractModelFromJson(readTextSafe(path.join(home, '.config', 'deepseek', 'config.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.deepseek', 'config.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.config', 'deepseek', 'config.json'))) ||
       env.DEEPSEEK_MODEL ||
       null;
   } else if (id === 'kiro') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.kiro', 'settings', 'cli.json'))) ||
-      extractModelFromJson(readTextSafe(path.join(home, '.kiro', 'config.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.kiro', 'settings', 'cli.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.kiro', 'config.json'))) ||
       env.KIRO_MODEL ||
       null;
   } else if (id === 'mistral-vibe') {
     rawModel =
-      extractModelFromTomlOrYaml(readTextSafe(path.join(home, '.vibe', 'config.toml')), safePayload.profile || env.VIBE_PROFILE || null) ||
+      extractModelFromTomlOrYaml(readConfigFileFromStart(path.join(home, '.vibe', 'config.toml')), safePayload.profile || env.VIBE_PROFILE || null) ||
       env.VIBE_MODEL ||
       env.MISTRAL_MODEL ||
       null;
   } else if (id === 'factory-droid') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.factory', 'settings.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.factory', 'settings.json'))) ||
       env.DROID_MODEL ||
       env.FACTORY_MODEL ||
       null;
   } else if (id === 'amp') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.config', 'amp', 'settings.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.config', 'amp', 'settings.json'))) ||
       env.AMP_MODEL ||
       null;
   } else if (id === 'gemini-cli') {
     rawModel =
-      extractModelFromJson(readTextSafe(path.join(home, '.gemini', 'settings.json'))) ||
+      extractModelFromJson(readConfigFileFromStart(path.join(home, '.gemini', 'settings.json'))) ||
       env.GEMINI_MODEL ||
       null;
   }

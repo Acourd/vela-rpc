@@ -54,10 +54,16 @@ export async function runEnterpriseHardeningTests() {
   assert.ok(!jsonSanitized.includes('abc_secret_777'), 'Quoted JSON token must be redacted');
   assert.ok(!jsonSanitized.includes('space_tail_7'), 'Quoted JSON value with spaces must be fully redacted');
   assert.ok(!jsonSanitized.includes('"xy"'), 'Short quoted JSON secret must be redacted');
-  // Short-payload JWT (e30) & Unicode-escaped JSON keys ("pass\u0077ord") must be redacted
-  const shortJwtAndEscaped = sanitizePrivacy('JWT eyJhbGciOiJIUzI1NiJ9.e30.abc123def456 {"pass\\u0077ord":"prefix space_tail_7"}');
+  // Short-payload JWT (e30), whitespace-header JWT, backslash Unicode escape, and tab URL creds
+  const wsJwtHeader = Buffer.from('{ "alg": "HS256", "typ": "JWT" }').toString('base64url');
+  const wsJwt = `${wsJwtHeader}.e30.sig_ws_123456`;
+  const shortJwtAndEscaped = sanitizePrivacy(
+    `JWT eyJhbGciOiJIUzI1NiJ9.e30.abc123def456 ${wsJwt} {"pass\\u0077ord":"BACKSLASH_CANARY\\u005c"} https://user\t:tabpass@host.tld/x`
+  );
   assert.ok(!shortJwtAndEscaped.includes('e30.abc123def456'), 'Short-payload JWT must be redacted');
-  assert.ok(!shortJwtAndEscaped.includes('space_tail_7'), 'Unicode-escaped JSON password key must be redacted');
+  assert.ok(!shortJwtAndEscaped.includes('sig_ws_123456'), 'Whitespace-header JWT must be redacted');
+  assert.ok(!shortJwtAndEscaped.includes('BACKSLASH_CANARY'), 'Unicode backslash escape in JSON password must be redacted');
+  assert.ok(!shortJwtAndEscaped.includes('tabpass'), 'URL credential with tab must be redacted');
 
   const serialized = JSON.stringify(act);
   assert.ok(!serialized.includes('tok_live_9876543210abcdef'), 'Bearer token must never reach Discord');
@@ -110,8 +116,13 @@ export async function runEnterpriseHardeningTests() {
     // Unknown session falls back to quoted active profile [profiles."work"] (never [profiles."legacy"])
     assert.strictEqual(detectDynamicModel('codex', { sessionId: 'sess-unknown' }, { homeDir: tmpHome, env: {} }), 'GPT 5.4 Codex');
     assert.strictEqual(detectDynamicModel('opencode', {}, { homeDir: tmpHome, env: {} }), 'Claude Sonnet 4.6');
-    // Inactive TOML profile with bracket inside quotes [profiles."inactive]name"] MUST NOT leak as root
-    fs.writeFileSync(path.join(tmpHome, '.vibe', 'config.toml'), '[profiles."inactive]name"]\nactive_model = "wrong-bracket-model"\n', 'utf8');
+    // Large TOML (>70 KiB) with [profiles."inactive]name"] and multiline string containing model="..." MUST return null
+    const largePadding = '# ' + 'x'.repeat(72000) + '\n';
+    fs.writeFileSync(
+      path.join(tmpHome, '.vibe', 'config.toml'),
+      'prompt = """\nmodel = "wrong-multiline-model"\n"""\n[profiles."inactive]name"]\n' + largePadding + 'active_model = "wrong-bracket-model"\n',
+      'utf8'
+    );
     assert.strictEqual(detectDynamicModel('mistral-vibe', {}, { homeDir: tmpHome, env: {} }), null);
     // Antigravity MODEL_PLACEHOLDER_UNKNOWN must return null (never 'Gemini AI')
     assert.strictEqual(formatModelName('MODEL_PLACEHOLDER_UNKNOWN'), null);
@@ -187,7 +198,15 @@ export async function runEnterpriseHardeningTests() {
   const closeS2 = await client.sendEvent(claudeS2End, false);
   assert.strictEqual(closeS2.keptActiveSession, 'claude-code:s1');
 
-  // Closing last active session s1 via SessionEnd MUST clear Discord presence (null)
+  // POST /event with JSON `null` MUST return 400 and never crash daemon
+  const nullRes = await fetch('http://127.0.0.1:19459/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: 'null',
+  });
+  assert.strictEqual(nullRes.status, 400, 'POST /event with JSON null must return 400');
+
+  // Closing last active session s1 via SessionEnd MUST clear Discord presence AND reset context so new anon event doesn't resurrect old title
   const claudeS1End = translateClaudeEvent('SessionEnd', {
     session_id: 's1',
     session_name: 'Active Mission S1',
@@ -196,6 +215,10 @@ export async function runEnterpriseHardeningTests() {
   assert.strictEqual(closeS1.cleared, true);
   await new Promise((r) => setTimeout(r, 80));
   assert.strictEqual(mockServer.receivedActivities[mockServer.receivedActivities.length - 1], null);
+
+  // New anonymous event after clear MUST NOT resurrect 'Active Mission S1'
+  const freshAnon = await client.sendEvent({ state: 'thinking', forceImmediate: true }, false);
+  assert.ok(!JSON.stringify(freshAnon.activity || {}).includes('Active Mission S1'), 'Closed title must never resurrect after clear()');
 
   await daemon.stop();
   await mockServer.close();

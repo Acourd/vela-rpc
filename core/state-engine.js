@@ -40,6 +40,89 @@ export function truncateUtf8(str, maxBytes = DISCORD_LIMITS.MAX_FIELD_BYTES) {
   return accumulated;
 }
 
+const SECRET_KEY_PATTERN = /^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)$/i;
+
+function decodeUnicodeEscapes(str) {
+  return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+function redactJsonValue(val) {
+  if (Array.isArray(val)) return val.map(redactJsonValue);
+  if (val && typeof val === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (SECRET_KEY_PATTERN.test(k)) {
+        out[k] = '[REDACTED_TOKEN]';
+      } else {
+        out[k] = redactJsonValue(v);
+      }
+    }
+    return out;
+  }
+  return val;
+}
+
+/**
+ * Redacts embedded valid JSON objects structurally (handling Unicode escapes in keys & values
+ * such as {"pass\u0077ord":"BACKSLASH_CANARY\u005c"} without corrupting delimiters).
+ */
+function redactEmbeddedJson(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '{') {
+      let depth = 0;
+      let inStr = false;
+      let escaped = false;
+      let end = -1;
+      for (let j = i; j < text.length; j += 1) {
+        const ch = text[j];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\' && inStr) { escaped = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (!inStr) {
+          if (ch === '{') depth += 1;
+          else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) { end = j; break; }
+          }
+        }
+      }
+      if (end !== -1) {
+        const candidate = text.slice(i, end + 1);
+        try {
+          const parsed = JSON.parse(candidate);
+          out += JSON.stringify(redactJsonValue(parsed));
+          i = end + 1;
+          continue;
+        } catch (_) {}
+      }
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Structurally detects and redacts ANY RFC 7515/7519 JWT/JWS/JWE token (including headers with whitespace).
+ */
+function redactStructuralJwts(text) {
+  return text.replace(/\b([A-Za-z0-9_-]{4,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]{4,})\b/g, (full, h) => {
+    try {
+      const padded = h.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (h.length % 4)) % 4);
+      const decoded = Buffer.from(padded, 'base64').toString('utf8');
+      const headerObj = JSON.parse(decoded);
+      if (headerObj && typeof headerObj === 'object' && !Array.isArray(headerObj)) {
+        if ('alg' in headerObj || 'typ' in headerObj || 'enc' in headerObj) {
+          return '[REDACTED_TOKEN]';
+        }
+      }
+    } catch (_) {}
+    return full;
+  });
+}
+
 /**
  * Strips sensitive local paths, tokens, credentials, and secret environment files.
  */
@@ -47,11 +130,11 @@ export function sanitizePrivacy(text, options = {}) {
   if (typeof text !== 'string') return '';
   let sanitized = text;
 
-  // 0. Decode Unicode JSON escapes (\uXXXX) so obfuscated keys like "pass\u0077ord" cannot bypass redaction
-  sanitized = sanitized.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  // 0. Structural redaction for embedded JSON objects (RFC 8259 Unicode escapes) & RFC 7519 JWTs
+  sanitized = redactEmbeddedJson(sanitized);
+  sanitized = redactStructuralJwts(sanitized);
 
   // 1. Obfuscate absolute home paths on Windows/Unix (handling single or double backslashes)
-  // e.g. C:\Users\<Username>\..., C:\\Users\\<Username>\\..., or /home/<username>/... or /Users/<username>/...
   sanitized = sanitized.replace(
     /(?:[a-zA-Z]:[/\\]+Users[/\\]+[^/\\\s]+|[/\\]+home[/\\]+[^/\\\s]+|[/\\]+Users[/\\]+[^/\\\s]+)/gi,
     '~'
@@ -61,24 +144,23 @@ export function sanitizePrivacy(text, options = {}) {
   sanitized = sanitized.replace(/\.env(?:\.[\w.-]+)?/gi, '[REDACTED_ENV]');
   sanitized = sanitized.replace(/(?:id_rsa|id_ed25519|id_ecdsa|\.pem|\.key)\b/gi, '[REDACTED_KEY]');
 
-  // 3. API keys, JWTs, Bearer tokens, URL credentials, and secret key-value / JSON assignments
+  // 3. API keys, Bearer tokens, URL credentials (including tabs/whitespace in userinfo), and KV secret assignments
   sanitized = sanitized.replace(/(?:ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16})/g, '[REDACTED_TOKEN]');
-  sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{4,}\b/g, '[REDACTED_TOKEN]');
   sanitized = sanitized.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED_TOKEN]');
   sanitized = sanitized.replace(
-    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*"(?:\\.|[^"\\])*"/gi,
-    '$1="[REDACTED_TOKEN]"'
+    /(["']?)([A-Za-z0-9_\\-]+)\1(\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`,}\]]+)/g,
+    (full, q, rawKey, sep, rawVal) => {
+      const decodedKey = decodeUnicodeEscapes(rawKey);
+      if (SECRET_KEY_PATTERN.test(decodedKey)) {
+        if (rawVal.startsWith('"')) return `${decodedKey}="[REDACTED_TOKEN]"`;
+        if (rawVal.startsWith("'")) return `${decodedKey}='[REDACTED_TOKEN]'`;
+        return `${decodedKey}=[REDACTED_TOKEN]`;
+      }
+      return full;
+    }
   );
-  sanitized = sanitized.replace(
-    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*'(?:\\.|[^'\\])*'/gi,
-    "$1='[REDACTED_TOKEN]'"
-  );
-  sanitized = sanitized.replace(
-    /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*([^\s"'`,}\]]+)/gi,
-    '$1=[REDACTED_TOKEN]'
-  );
-  sanitized = sanitized.replace(/(https?:\/\/)[^/\s]+@/gi, '$1[REDACTED]@');
+  sanitized = sanitized.replace(/(https?:\/\/)[^/\r\n@]+@/gi, '$1[REDACTED]@');
 
   // 4. Project stealth mode
   if (options.stealthMode) {
@@ -363,7 +445,7 @@ export class StateEngine extends EventEmitter {
   }
 
   /**
-   * Cancels any pending debounced activity and clears active presence.
+   * Cancels any pending debounced activity and clears active presence + stale session context.
    */
   clear() {
     this._cancelTimer();
@@ -371,6 +453,19 @@ export class StateEngine extends EventEmitter {
     this.activeActivity = null;
     this.lastDispatchedKey = null;
     this.currentState = COGNITIVE_STATES.IDLE;
+    this.lastEvent = {};
+    this.currentHarnessKey = null;
+    this.currentSessionKey = null;
+    this.currentContext = {
+      project: 'Workspace',
+      branch: 'main',
+      tool: null,
+      details: null,
+      task: null,
+      chatTitle: null,
+      model: null,
+      stepCount: 0,
+    };
   }
 
   /**

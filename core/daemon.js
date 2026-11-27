@@ -296,11 +296,29 @@ export class AcourdDaemon extends EventEmitter {
           }
         }
 
-        // Enrich with real dynamic model detection if payload omitted model (preserve explicit null)
+        // Enrich with canonical harness + dynamic model detection (preserve explicit null)
         const dynamicModel = payload.model !== undefined
           ? payload.model
           : detectDynamicModel(harness.id, payload);
-        const enrichedPayload = { ...payload, ...(rawSessionId ? { sessionId: rawSessionId } : {}), model: dynamicModel ?? null };
+        const enrichedPayload = {
+          ...payload,
+          harness: harness.id,
+          source: canonicalSource,
+          ...(rawSessionId ? { sessionId: rawSessionId } : {}),
+          model: dynamicModel ?? null,
+        };
+
+        // Prune expired sessions before any promotion or lease decision
+        if (this.staleTimeoutMs > 0) {
+          for (const [k, sess] of this.sessions.entries()) {
+            if ((now - sess.lastSeenAt) > this.staleTimeoutMs) {
+              this.sessions.delete(k);
+              if (this.activeLease && this.activeLease.sessionKey === k) {
+                this.activeLease = null;
+              }
+            }
+          }
+        }
 
         // Rule 1: Session release / teardown with deterministic failover or clean clear
         if (payload.releaseLease) {
@@ -449,6 +467,11 @@ export class AcourdDaemon extends EventEmitter {
       if (exceeded) return;
       try {
         const data = raw.trim() ? JSON.parse(raw) : {};
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'JSON payload must be an object' }));
+          return;
+        }
         callback(data);
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
